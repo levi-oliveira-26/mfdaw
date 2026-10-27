@@ -1,0 +1,15 @@
+# Ignorar pasta de compilação e dependências geradas pelo CMake
+build/
+_deps/
+
+# Ignorar configurações temporárias do editor e IDE
+.vscode/
+.vs/
+*.user
+
+# Ignorar binários compilados
+*.exe
+*.obj
+*.lib
+*.pdb
+*.out
