@@ -59,6 +59,7 @@ target_sources(MFDaw PRIVATE
     Source/UI/StepGridComponent.cpp
     Source/UI/SmartChordsComponent.cpp
     Source/UI/PianoRollComponent.cpp
+    Source/UI/VoiceRecorderComponentView.cpp
     Source/UI/MainEditor.cpp)
 
 target_include_directories(MFDaw PRIVATE Source)
@@ -85,6 +86,7 @@ add_executable(MFDawTests
     Source/UI/StepGridComponent.cpp
     Source/UI/SmartChordsComponent.cpp
     Source/UI/PianoRollComponent.cpp
+    Source/UI/VoiceRecorderComponentView.cpp
     Source/UI/MainEditor.cpp)
 
 target_include_directories(MFDawTests PRIVATE Source)

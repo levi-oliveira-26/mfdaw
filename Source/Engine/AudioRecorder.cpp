@@ -1,5 +1,7 @@
 #include "Engine/AudioRecorder.h"
 
+#include <cmath>
+
 namespace mf
 {
 AudioRecorder::AudioRecorder (double initialSampleRate)
@@ -79,6 +81,12 @@ void AudioRecorder::pushAudio (const float* const* channelData, int numChannelsI
         return;
 
     const int channels = juce::jlimit (1, numChannels, numChannelsIn);
+    float peak = 0.0f;
+    for (int channel = 0; channel < channels; ++channel)
+        for (int sample = 0; sample < numSamples; ++sample)
+            peak = juce::jmax (peak, std::abs (channelData[channel][sample]));
+    inputLevel.store (peak, std::memory_order_relaxed);
+
     int start1 = 0, size1 = 0, start2 = 0, size2 = 0;
     fifo.prepareToWrite (numSamples, start1, size1, start2, size2);
     const int writable = size1 + size2;

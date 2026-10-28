@@ -36,7 +36,8 @@ MainEditor::MainEditor (MainProcessor& processorToEdit)
       stepGrid (processorToEdit.getProjectState(), processorToEdit.getSampleManager(),
                 processorToEdit.getSampleRate()),
       smartChords (processorToEdit.getProjectState(), processorToEdit),
-      pianoRoll (processorToEdit.getProjectState(), processorToEdit)
+      pianoRoll (processorToEdit.getProjectState(), processorToEdit),
+      voiceRecorder (processorToEdit)
 {
     setLookAndFeel (&laf);
 
@@ -110,6 +111,7 @@ MainEditor::MainEditor (MainProcessor& processorToEdit)
     addChildComponent (stepGrid);
     addChildComponent (smartChords);
     addChildComponent (pianoRoll);
+    addChildComponent (voiceRecorder);
     addChildComponent (placeholder);
 
     // ----- Reatividade -----
@@ -193,6 +195,7 @@ void MainEditor::resized()
     stepGrid.setBounds (inner);
     smartChords.setBounds (inner);
     pianoRoll.setBounds (inner);
+    voiceRecorder.setBounds (inner);
     placeholder.setBounds (inner);
 }
 
@@ -252,17 +255,19 @@ void MainEditor::refreshFromState()
     const bool showGrid = ! freeMode && step == 1;
     const bool showSmartChords = ! freeMode && step == 2;
     const bool showPianoRoll = ! freeMode && step == 3;
+    const bool showVoiceRecorder = ! freeMode && step == 4;
     stepGrid.setVisible (showGrid);
     smartChords.setVisible (showSmartChords);
     pianoRoll.setVisible (showPianoRoll);
-    placeholder.setVisible (! showGrid && ! showSmartChords && ! showPianoRoll);
+    voiceRecorder.setVisible (showVoiceRecorder);
+    placeholder.setVisible (! showGrid && ! showSmartChords && ! showPianoRoll && ! showVoiceRecorder);
 
     if (freeMode)
         placeholder.setContent (txt ("Modo Livre - Timeline"),
                                 txt ("Visualização de arranjo em pistas paralelas (Card 6.1 - em breve). "
                                      "Seu projeto continua intacto: volte ao Modo Assistente quando quiser."),
                                 col (kTextPrimary));
-    else if (! showGrid && ! showSmartChords && ! showPianoRoll)
+    else if (! showGrid && ! showSmartChords && ! showPianoRoll && ! showVoiceRecorder)
         placeholder.setContent (txt (kStepTitles[step - 1]), txt (kStepDescriptions[step - 1]), stepColour (step));
 
     repaint();

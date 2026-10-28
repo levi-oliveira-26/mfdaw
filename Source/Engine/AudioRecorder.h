@@ -23,6 +23,7 @@ public:
 
     [[nodiscard]] bool isRecording() const noexcept { return recording.load (std::memory_order_acquire); }
     [[nodiscard]] juce::File getCurrentFile() const noexcept { return currentFile; }
+    [[nodiscard]] float getInputLevel() const noexcept { return inputLevel.load (std::memory_order_relaxed); }
 
 private:
     void run() override;
@@ -43,5 +44,6 @@ private:
     std::atomic<bool> recording { false };
     std::atomic<bool> stopRequested { false };
     juce::File currentFile;
+    std::atomic<float> inputLevel { 0.0f };
 };
 } // namespace mf

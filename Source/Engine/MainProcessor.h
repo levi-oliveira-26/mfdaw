@@ -40,6 +40,7 @@ public:
     // --- Acesso para a UI (message thread) ---
     [[nodiscard]] ProjectState& getProjectState() noexcept { return projectState; }
     [[nodiscard]] SampleManager& getSampleManager() noexcept { return sampleManager; }
+    [[nodiscard]] AudioRecorder& getAudioRecorder() noexcept { return audioRecorder; }
     [[nodiscard]] double getSampleRate() const noexcept { return sampleRate; }
     void requestStop() noexcept;
     void requestChordPreview (int chordIndex, bool pressed) noexcept;

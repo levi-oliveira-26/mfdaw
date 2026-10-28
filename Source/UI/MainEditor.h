@@ -9,6 +9,7 @@
 #include "UI/StepGridComponent.h"
 #include "UI/SmartChordsComponent.h"
 #include "UI/PianoRollComponent.h"
+#include "UI/VoiceRecorderComponentView.h"
 
 namespace mf
 {
@@ -70,6 +71,7 @@ private:
     StepGridComponent stepGrid;
     SmartChordsComponent smartChords;
     PianoRollComponent pianoRoll;
+    VoiceRecorderComponentView voiceRecorder;
     PlaceholderPanel placeholder;
     juce::Rectangle<int> contentArea;
 
