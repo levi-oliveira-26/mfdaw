@@ -96,6 +96,7 @@ public:
 
     // --- Step sequencer (Card 1.1) ---
     [[nodiscard]] juce::String getTrackName (int track) const;
+    void setTrackName (int track, const juce::String& newName);
     [[nodiscard]] int          getTrackMask (int track) const;
     [[nodiscard]] bool         isStepActive (int track, int step) const;
     void toggleStep (int track, int step);

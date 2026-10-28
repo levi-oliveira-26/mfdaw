@@ -1,6 +1,6 @@
 #pragma once
 
-#include <memory>
+#include <array>
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
@@ -48,8 +48,7 @@ private:
     SampleManager& sampleManager;
     double targetSampleRate;
     juce::Slider swingSlider;
-    std::unique_ptr<juce::FileChooser> fileChooser;
-    int selectedTrack { -1 };
+    std::array<juce::Label, kNumTracks> trackNameLabels;
     int playheadStep { -1 };
     int velocityTrack { -1 };
     int velocityStep { -1 };

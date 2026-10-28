@@ -2,10 +2,6 @@
 
 #include "UI/Theme.h"
 
-#include <juce_audio_formats/juce_audio_formats.h>
-
-#include <cmath>
-
 namespace mf
 {
 StepGridComponent::StepGridComponent (ProjectState& stateToUse, SampleManager& sampleManagerToUse,
@@ -23,6 +19,19 @@ StepGridComponent::StepGridComponent (ProjectState& stateToUse, SampleManager& s
     swingSlider.addListener (this);
     addAndMakeVisible (swingSlider);
 
+    for (int track = 0; track < kNumTracks; ++track)
+    {
+        auto& trackNameLabel = trackNameLabels[static_cast<std::size_t> (track)];
+        trackNameLabel.setText (state.getTrackName (track), juce::dontSendNotification);
+        trackNameLabel.setEditable (true, true);
+        trackNameLabel.setJustificationType (juce::Justification::centredLeft);
+        trackNameLabel.onTextChange = [this, track]
+        {
+            state.setTrackName (track, trackNameLabels[static_cast<std::size_t> (track)].getText());
+        };
+        addAndMakeVisible (trackNameLabel);
+    }
+
     state.getTree().addListener (this);
 }
 
@@ -35,6 +44,15 @@ StepGridComponent::~StepGridComponent()
 void StepGridComponent::resized()
 {
     swingSlider.setBounds (getWidth() - 88, 4, 76, 44);
+
+    const auto grid = getGridBounds();
+    const float rowHeight = grid.getHeight() / static_cast<float> (kNumTracks);
+    for (int track = 0; track < kNumTracks; ++track)
+    {
+        trackNameLabels[static_cast<std::size_t> (track)].setBounds (
+            0, juce::roundToInt (grid.getY() + rowHeight * track),
+            juce::roundToInt (kLabelWidth - 8.0f), juce::roundToInt (rowHeight));
+    }
 }
 
 void StepGridComponent::sliderValueChanged (juce::Slider* slider)
@@ -52,8 +70,22 @@ void StepGridComponent::setPlayheadStep (int step)
     }
 }
 
-void StepGridComponent::valueTreePropertyChanged (juce::ValueTree&, const juce::Identifier&)
+void StepGridComponent::valueTreePropertyChanged (juce::ValueTree& tree, const juce::Identifier& property)
 {
+    if (property == IDs::name && tree.getParent().isValid()
+        && tree.getParent().getType() == IDs::sequencer)
+    {
+        const auto sequencer = state.getTree().getChildWithName (IDs::sequencer);
+        const int track = sequencer.indexOf (tree);
+        if (track >= 0 && track < kNumTracks)
+        {
+            auto& label = trackNameLabels[static_cast<std::size_t> (track)];
+            const auto newName = state.getTrackName (track);
+            if (label.getText() != newName)
+                label.setText (newName, juce::dontSendNotification);
+        }
+    }
+
     repaint();
 }
 
@@ -100,12 +132,6 @@ void StepGridComponent::paint (juce::Graphics& g)
 
     for (int track = 0; track < kNumTracks; ++track)
     {
-        const auto firstCell = getCellBounds (track, 0);
-        g.setColour (col (kTextMuted));
-        g.drawText (state.getTrackName (track),
-                    juce::Rectangle<float> (0.0f, firstCell.getY(), kLabelWidth - 8.0f, firstCell.getHeight()),
-                    juce::Justification::centredLeft);
-
         for (int step = 0; step < kNumSteps; ++step)
         {
             const auto cell = getCellBounds (track, step).reduced (2.0f);
@@ -149,71 +175,6 @@ void StepGridComponent::paint (juce::Graphics& g)
 void StepGridComponent::mouseDown (const juce::MouseEvent& e)
 {
     const auto grid = getGridBounds();
-
-    if (e.position.x >= 0.0f && e.position.x < kLabelWidth && e.position.y >= grid.getY()
-        && e.position.y < grid.getBottom())
-    {
-        const int track = juce::jlimit (0, kNumTracks - 1,
-            static_cast<int> ((e.position.y - grid.getY()) / (grid.getHeight() / kNumTracks)));
-
-        selectedTrack = track;
-        fileChooser = std::make_unique<juce::FileChooser> ("Choose sample", juce::File {},
-                                                            "*.wav;*.mp3;*.aif;*.aiff");
-        fileChooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
-            [this, track] (const juce::FileChooser& chooser)
-            {
-                const auto file = chooser.getResult();
-                if (! file.existsAsFile())
-                    return;
-
-                SampleManager& manager = sampleManager;
-                const double outputSampleRate = targetSampleRate;
-                juce::Thread::launch ([&manager, track, file, outputSampleRate]
-                {
-                    juce::AudioFormatManager formats;
-                    formats.registerBasicFormats();
-
-                    std::unique_ptr<juce::AudioFormatReader> reader (
-                        formats.createReaderFor (file));
-                    if (reader == nullptr)
-                        return;
-
-                    juce::AudioBuffer<float> decoded (
-                        juce::jmax (1, static_cast<int> (reader->numChannels)),
-                        juce::jmax (1, static_cast<int> (reader->lengthInSamples)));
-                    if (! reader->read (&decoded, 0, decoded.getNumSamples(), 0, true, true))
-                        return;
-
-                    juce::AudioBuffer<float> converted (decoded);
-                    if (std::abs (reader->sampleRate - outputSampleRate) > 1.0 && outputSampleRate > 0.0)
-                    {
-                        const double ratio = reader->sampleRate / outputSampleRate;
-                        const int convertedLength = juce::jmax (1,
-                            static_cast<int> (std::ceil ((decoded.getNumSamples() - 1) / ratio) + 1));
-                        juce::AudioBuffer<float> resampled (decoded.getNumChannels(), convertedLength);
-
-                        for (int channel = 0; channel < resampled.getNumChannels(); ++channel)
-                            for (int sample = 0; sample < convertedLength; ++sample)
-                            {
-                                const double sourcePosition = sample * ratio;
-                                const int sourceIndex = juce::jlimit (0, decoded.getNumSamples() - 1,
-                                                                       static_cast<int> (sourcePosition));
-                                const int nextIndex = juce::jmin (decoded.getNumSamples() - 1, sourceIndex + 1);
-                                const float fraction = static_cast<float> (sourcePosition - sourceIndex);
-                                const float a = decoded.getSample (channel, sourceIndex);
-                                const float b = decoded.getSample (channel, nextIndex);
-                                resampled.setSample (channel, sample, a + fraction * (b - a));
-                            }
-
-                        converted = std::move (resampled);
-                    }
-
-                    manager.setSample (track,
-                        std::make_shared<const AudioSample> (std::move (converted)));
-                });
-            });
-        return;
-    }
 
     if (! grid.contains (e.position))
         return;

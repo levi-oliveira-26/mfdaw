@@ -139,6 +139,9 @@ void ProjectState::ensureStructure()
     for (int track = 0; track < kNumTracks; ++track)
     {
         auto trackTree = sequencer.getChild (track);
+        if (! trackTree.hasProperty (IDs::name))
+            trackTree.setProperty (IDs::name, kDefaultTrackNames[track], nullptr);
+
         for (int step = 0; step < kNumSteps; ++step)
         {
             if (! trackTree.hasProperty (velocityProperty (step)))
@@ -195,6 +198,19 @@ juce::String ProjectState::getTrackName (int track) const
         return {};
 
     return tree.getChildWithName (IDs::sequencer).getChild (track).getProperty (IDs::name, "").toString();
+}
+
+void ProjectState::setTrackName (int track, const juce::String& newName)
+{
+    if (! isTrackValid (track))
+        return;
+
+    const auto trimmedName = newName.trim();
+    if (trimmedName.isEmpty())
+        return;
+
+    auto trackTree = tree.getChildWithName (IDs::sequencer).getChild (track);
+    trackTree.setProperty (IDs::name, trimmedName, &undoManager);
 }
 
 int ProjectState::getTrackMask (int track) const
