@@ -28,6 +28,8 @@ namespace IDs
     inline const juce::Identifier scale      { "scale" };        // 0 = maior, 1 = menor
     inline const juce::Identifier sampleRate { "sampleRate" };
     inline const juce::Identifier bitDepth   { "bitDepth" };
+    inline const juce::Identifier swing      { "swing" };
+    inline const juce::Identifier formatVersion { "formatVersion" };
     inline const juce::Identifier sequencer  { "SEQUENCER" };
     inline const juce::Identifier track      { "TRACK" };
     inline const juce::Identifier mask       { "mask" };         // bit n = passo n ativo
@@ -88,11 +90,7 @@ public:
         return swingAmount.load (std::memory_order_acquire);
     }
 
-    void setSwingAmount (float newAmount) noexcept
-    {
-        swingAmount.store (juce::jlimit (0.0f, 1.0f, newAmount),
-                           std::memory_order_release);
-    }
+    void setSwingAmount (float newAmount);
 
     // --- Step sequencer (Card 1.1) ---
     [[nodiscard]] juce::String getTrackName (int track) const;

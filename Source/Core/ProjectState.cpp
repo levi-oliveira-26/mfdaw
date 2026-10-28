@@ -94,6 +94,9 @@ ProjectState::ProjectState()
     session.setProperty (IDs::freeMode, false, nullptr);
     session.setProperty (IDs::playing, false, nullptr);
 
+    swingAmount.store (juce::jlimit (0.0f, 1.0f,
+                                     static_cast<float> (tree.getProperty (IDs::swing, 0.0))),
+                       std::memory_order_release);
     modified.store (false, std::memory_order_release);
 
     // Só começamos a escutar depois da montagem inicial (projeto novo = limpo).
@@ -119,6 +122,8 @@ void ProjectState::ensureStructure()
     ensure (IDs::scale, 0);
     ensure (IDs::sampleRate, 44100.0);
     ensure (IDs::bitDepth, 24);
+    ensure (IDs::formatVersion, 1);
+    ensure (IDs::swing, 0.0);
 
     // Arquivo corrompido / editado à mão: força BPM dentro dos limites.
     const int currentBpm = getBpm();
@@ -187,6 +192,13 @@ void ProjectState::setSampleRate (double newRate)
 {
     if (newRate > 0.0)
         tree.setProperty (IDs::sampleRate, newRate, &undoManager);
+}
+
+void ProjectState::setSwingAmount (float newAmount)
+{
+    const float limitedAmount = juce::jlimit (0.0f, 1.0f, newAmount);
+    swingAmount.store (limitedAmount, std::memory_order_release);
+    tree.setProperty (IDs::swing, limitedAmount, &undoManager);
 }
 
 // ---------------------------------------------------------------------------
@@ -303,6 +315,9 @@ bool ProjectState::loadFromJson (const juce::var& json)
     // Mantém a raiz existente para não perder os listeners de UI, engine e undo.
     tree.copyPropertiesAndChildrenFrom (loaded, nullptr);
     ensureStructure();
+    swingAmount.store (juce::jlimit (0.0f, 1.0f,
+                                     static_cast<float> (tree.getProperty (IDs::swing, 0.0))),
+                       std::memory_order_release);
 
     undoManager.clearUndoHistory();
     markSaved();
@@ -320,9 +335,13 @@ bool ProjectState::saveToFile (const juce::File& file)
     jassert (juce::MessageManager::getInstance()->isThisTheMessageThread());
 
     auto projectFile = file;
-    projectFile = projectFile.withFileExtension (juce::String (kProjectFileExtension).substring (1));
+    projectFile = projectFile.withFileExtension (juce::String (kProjectFileExtension));
 
-    if (! projectFile.replaceWithText (createJsonString()))
+    const auto parentDirectory = projectFile.getParentDirectory();
+    if (! parentDirectory.isDirectory() && ! parentDirectory.createDirectory())
+        return false;
+
+    if (! projectFile.replaceWithText (createJsonString(), false, false))
         return false;
 
     markSaved();
@@ -346,8 +365,13 @@ bool ProjectState::loadFromFile (const juce::File& file)
 // ---------------------------------------------------------------------------
 // Estado "sujo" (isModified)
 // ---------------------------------------------------------------------------
-void ProjectState::valueTreePropertyChanged (juce::ValueTree&, const juce::Identifier&)
+void ProjectState::valueTreePropertyChanged (juce::ValueTree&, const juce::Identifier& property)
 {
+    if (property == IDs::swing)
+        swingAmount.store (juce::jlimit (0.0f, 1.0f,
+                                         static_cast<float> (tree.getProperty (IDs::swing, 0.0))),
+                           std::memory_order_release);
+
     modified.store (true, std::memory_order_release);
 }
 
