@@ -11,5 +11,6 @@ class ChordGenerator final
 {
 public:
     [[nodiscard]] static std::array<juce::String, 4> generate (int root, Scale scale);
+    [[nodiscard]] static std::array<int, 3> generateNotes (int root, Scale scale, int progressionIndex);
 };
 } // namespace mf

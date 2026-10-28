@@ -117,6 +117,20 @@ void SmartChordsComponent::mouseDrag (const juce::MouseEvent& event)
     repaint();
 }
 
+void SmartChordsComponent::mouseDoubleClick (const juce::MouseEvent& event)
+{
+    for (size_t i = 0; i < chordLabels.size(); ++i)
+    {
+        if (chordLabels[i].getBounds().contains (event.getPosition()))
+        {
+            const auto notes = ChordGenerator::generateNotes (state.getKeyRoot(), state.getScale(),
+                                                               static_cast<int> (i));
+            state.setHarmonyChord (static_cast<int> (i), notes);
+            break;
+        }
+    }
+}
+
 void SmartChordsComponent::valueTreePropertyChanged (juce::ValueTree&, const juce::Identifier& property)
 {
     if (property == IDs::keyRoot || property == IDs::scale)

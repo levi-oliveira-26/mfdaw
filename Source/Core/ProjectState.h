@@ -31,6 +31,10 @@ namespace IDs
     inline const juce::Identifier swing      { "swing" };
     inline const juce::Identifier formatVersion { "formatVersion" };
     inline const juce::Identifier sequencer  { "SEQUENCER" };
+    inline const juce::Identifier harmony    { "HARMONY" };
+    inline const juce::Identifier chord      { "CHORD" };
+    inline const juce::Identifier slot       { "slot" };
+    inline const juce::Identifier notes      { "notes" };
     inline const juce::Identifier track      { "TRACK" };
     inline const juce::Identifier mask       { "mask" };         // bit n = passo n ativo
 
@@ -83,6 +87,10 @@ public:
     void setBpm (int newBpm);
     void setKey (int root, Scale newScale);
     void setSampleRate (double newRate);
+
+    // --- Harmonia persistente (Card 2.1) ---
+    void setHarmonyChord (int slot, const std::array<int, 3>& midiNotes);
+    [[nodiscard]] juce::String getHarmonyNotes (int slot) const;
 
     // --- Groove do step sequencer (Card R-04) ---
     [[nodiscard]] float getSwingAmount() const noexcept

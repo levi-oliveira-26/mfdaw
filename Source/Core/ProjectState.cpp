@@ -131,6 +131,8 @@ void ProjectState::ensureStructure()
     if (clampedBpm != currentBpm)
         tree.setProperty (IDs::bpm, clampedBpm, nullptr);
 
+    tree.getOrCreateChildWithName (IDs::harmony, nullptr);
+
     auto sequencer = tree.getOrCreateChildWithName (IDs::sequencer, nullptr);
 
     while (sequencer.getNumChildren() < kNumTracks)
@@ -192,6 +194,57 @@ void ProjectState::setSampleRate (double newRate)
 {
     if (newRate > 0.0)
         tree.setProperty (IDs::sampleRate, newRate, &undoManager);
+}
+
+void ProjectState::setHarmonyChord (int slot, const std::array<int, 3>& midiNotes)
+{
+    if (slot < 0 || slot >= 4)
+        return;
+
+    auto harmony = tree.getChildWithName (IDs::harmony);
+    juce::ValueTree chordTree;
+
+    for (int i = 0; i < harmony.getNumChildren(); ++i)
+    {
+        auto child = harmony.getChild (i);
+        if (static_cast<int> (child.getProperty (IDs::slot, -1)) == slot)
+        {
+            chordTree = child;
+            break;
+        }
+    }
+
+    juce::String noteList;
+    for (size_t i = 0; i < midiNotes.size(); ++i)
+    {
+        if (i != 0)
+            noteList += ",";
+        noteList += juce::String (juce::jlimit (0, 127, midiNotes[i]));
+    }
+
+    if (chordTree.isValid())
+    {
+        chordTree.setProperty (IDs::notes, noteList, &undoManager);
+    }
+    else
+    {
+        chordTree = juce::ValueTree (IDs::chord);
+        chordTree.setProperty (IDs::slot, slot, &undoManager);
+        chordTree.setProperty (IDs::notes, noteList, &undoManager);
+        harmony.appendChild (chordTree, &undoManager);
+    }
+}
+
+juce::String ProjectState::getHarmonyNotes (int slot) const
+{
+    const auto harmony = tree.getChildWithName (IDs::harmony);
+    for (int i = 0; i < harmony.getNumChildren(); ++i)
+    {
+        const auto chordTree = harmony.getChild (i);
+        if (static_cast<int> (chordTree.getProperty (IDs::slot, -1)) == slot)
+            return chordTree.getProperty (IDs::notes, "").toString();
+    }
+    return {};
 }
 
 void ProjectState::setSwingAmount (float newAmount)
