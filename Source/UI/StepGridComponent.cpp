@@ -21,14 +21,15 @@ StepGridComponent::StepGridComponent (ProjectState& stateToUse, SampleManager& s
 
     for (int track = 0; track < kNumTracks; ++track)
     {
-        auto& trackNameLabel = trackNameLabels[static_cast<std::size_t> (track)];
-        trackNameLabel.setText (state.getTrackName (track), juce::dontSendNotification);
-        trackNameLabel.setEditable (true, true);
-        trackNameLabel.setJustificationType (juce::Justification::centredLeft);
-        trackNameLabel.onTextChange = [this, track]
+        auto* trackNameLabel = new juce::Label();
+        trackNameLabel->setText (state.getTrackName (track), juce::dontSendNotification);
+        trackNameLabel->setEditable (true, true);
+        trackNameLabel->setJustificationType (juce::Justification::centredLeft);
+        trackNameLabel->onTextChange = [this, track, trackNameLabel]
         {
-            state.setTrackName (track, trackNameLabels[static_cast<std::size_t> (track)].getText());
+            state.setTrackName (track, trackNameLabel->getText());
         };
+        trackNameLabels.add (trackNameLabel);
         addAndMakeVisible (trackNameLabel);
     }
 
@@ -49,7 +50,7 @@ void StepGridComponent::resized()
     const float rowHeight = grid.getHeight() / static_cast<float> (kNumTracks);
     for (int track = 0; track < kNumTracks; ++track)
     {
-        trackNameLabels[static_cast<std::size_t> (track)].setBounds (
+        trackNameLabels[track]->setBounds (
             0, juce::roundToInt (grid.getY() + rowHeight * track),
             juce::roundToInt (kLabelWidth - 8.0f), juce::roundToInt (rowHeight));
     }
@@ -79,10 +80,10 @@ void StepGridComponent::valueTreePropertyChanged (juce::ValueTree& tree, const j
         const int track = sequencer.indexOf (tree);
         if (track >= 0 && track < kNumTracks)
         {
-            auto& label = trackNameLabels[static_cast<std::size_t> (track)];
+            auto* label = trackNameLabels[track];
             const auto newName = state.getTrackName (track);
-            if (label.getText() != newName)
-                label.setText (newName, juce::dontSendNotification);
+            if (label->getText() != newName)
+                label->setText (newName, juce::dontSendNotification);
         }
     }
 

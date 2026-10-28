@@ -1,7 +1,5 @@
 #pragma once
 
-#include <array>
-
 #include <juce_gui_basics/juce_gui_basics.h>
 
 #include "Core/ProjectState.h"
@@ -48,7 +46,7 @@ private:
     SampleManager& sampleManager;
     double targetSampleRate;
     juce::Slider swingSlider;
-    std::array<juce::Label, kNumTracks> trackNameLabels;
+    juce::OwnedArray<juce::Label> trackNameLabels;
     int playheadStep { -1 };
     int velocityTrack { -1 };
     int velocityStep { -1 };
