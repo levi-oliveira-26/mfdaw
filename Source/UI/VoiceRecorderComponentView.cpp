@@ -13,10 +13,30 @@ VoiceRecorderComponentView::VoiceRecorderComponentView (MainProcessor& processor
     recordButton.setColour (juce::TextButton::buttonOnColourId, juce::Colour (theme::kActionRecord));
     recordButton.onClick = [this]
     {
-        state.setRecording (! state.isRecording());
+        if (state.isRecording())
+        {
+            state.setRecording (false);
+            engine.cancelRecordingCountIn();
+        }
+        else if (engine.getRecordingCountIn() > 0)
+        {
+            state.setRecording (false);
+            engine.cancelRecordingCountIn();
+        }
+        else
+        {
+            engine.requestRecordingCountIn();
+            if (! state.isPlaying())
+                state.setPlaying (true);
+        }
         recordButton.repaint();
     };
     addAndMakeVisible (recordButton);
+
+    countInLabel.setJustificationType (juce::Justification::centred);
+    countInLabel.setFont (theme::makeFont (18.0f, true));
+    countInLabel.setColour (juce::Label::textColourId, juce::Colour (theme::kBrandVoice));
+    addAndMakeVisible (countInLabel);
 
     startTimerHz (30);
 }
@@ -65,8 +85,8 @@ void VoiceRecorderComponentView::paint (juce::Graphics& g)
     {
         g.setColour (juce::Colour (kBrandVoice));
         const float columnWidth = static_cast<float> (envelope.getWidth()) / static_cast<float> (waveformEnvelope.size());
-        const float centreY = envelope.getCentreY();
-        const float halfHeight = envelope.getHeight() * 0.5f;
+        const float centreY = static_cast<float> (envelope.getCentreY());
+        const float halfHeight = static_cast<float> (envelope.getHeight()) * 0.5f;
 
         for (std::size_t i = 0; i < waveformEnvelope.size(); ++i)
         {
@@ -82,7 +102,9 @@ void VoiceRecorderComponentView::resized()
 {
     auto area = getLocalBounds().reduced (24);
     area.removeFromTop (44);
-    recordButton.setBounds (area.removeFromTop (36).removeFromRight (160));
+    auto controls = area.removeFromTop (48);
+    recordButton.setBounds (controls.removeFromRight (160));
+    countInLabel.setBounds (controls.removeFromRight (70));
     area.removeFromTop (16);
 
     vuArea = area.removeFromTop (42);
@@ -92,7 +114,8 @@ void VoiceRecorderComponentView::resized()
 
 void VoiceRecorderComponentView::timerCallback()
 {
-    juce::ignoreUnused (engine);
+    if (engine.consumeRecordingStart() && ! state.isRecording())
+        state.setRecording (true);
 
     const float targetLevel = juce::jlimit (0.0f, 1.0f, recorder.getInputLevel() * 4.0f);
     displayedLevel = juce::jmax (targetLevel, displayedLevel * 0.82f);
@@ -101,7 +124,19 @@ void VoiceRecorderComponentView::timerCallback()
     waveformPosition = (waveformPosition + 1) % waveformEnvelope.size();
 
     recordButton.setToggleState (state.isRecording(), juce::dontSendNotification);
-    recordButton.setButtonText (state.isRecording() ? "Parar gravacao" : "Gravar voz");
+
+    if (state.isRecording())
+        recordButton.setButtonText ("Parar gravação");
+    else
+    {
+        const int countIn = engine.getRecordingCountIn();
+        recordButton.setButtonText (countIn > 0 ? "Cancelar REC" : "Gravar voz");
+        countInLabel.setText (countIn > 0 ? juce::String (countIn) : juce::String(),
+                              juce::dontSendNotification);
+    }
+
+    if (state.isRecording())
+        countInLabel.setText (juce::String(), juce::dontSendNotification);
     repaint();
 }
 } // namespace mf

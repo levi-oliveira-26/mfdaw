@@ -98,6 +98,21 @@ void MainProcessor::requestNotePreview (int midiNote, bool pressed) noexcept
         post (EngineEvent::chordNote (midiNote, pressed));
 }
 
+void MainProcessor::requestRecordingCountIn() noexcept
+{
+    recordingStartSignal.store (false, std::memory_order_release);
+    recordingCountInCancelled.store (false, std::memory_order_release);
+    recordingCountIn.store (4, std::memory_order_relaxed);
+    recordingCountInRequested.store (true, std::memory_order_release);
+}
+
+void MainProcessor::cancelRecordingCountIn() noexcept
+{
+    recordingCountInRequested.store (false, std::memory_order_release);
+    recordingCountInCancelled.store (true, std::memory_order_release);
+    recordingCountIn.store (0, std::memory_order_relaxed);
+}
+
 void MainProcessor::post (const EngineEvent& event) noexcept
 {
     if (! uiToAudio.push (event))
@@ -328,6 +343,24 @@ void MainProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBu
     // Eventos MIDI de entrada serão tratados nos Passos 2/3 (acordes / piano roll).
 
     drainEvents();
+
+    if (recordingCountInCancelled.exchange (false, std::memory_order_acq_rel))
+    {
+        recordingCountInActive = false;
+        recordingCountInBeats = 0;
+        recordingStartSignal.store (false, std::memory_order_release);
+    }
+
+    if (! recordingCountInActive
+        && recordingCountInRequested.load (std::memory_order_acquire)
+        && playing)
+    {
+        recordingCountInRequested.store (false, std::memory_order_release);
+        recordingCountInActive = true;
+        recordingCountInBeats = 4;
+        recordingCountIn.store (4, std::memory_order_relaxed);
+    }
+
     if (audioRecorder.isRecording())
         audioRecorder.pushAudio (buffer);
     buffer.clear();
@@ -368,6 +401,24 @@ void MainProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBu
             {
                 const int scheduledStep = nextStep;
                 const int swingOffset = getSwingOffsetSamples (scheduledStep);
+
+                if (recordingCountInActive && (scheduledStep % 4) == 0)
+                {
+                    if (recordingCountInBeats > 0)
+                    {
+                        recordingCountIn.store (recordingCountInBeats, std::memory_order_relaxed);
+                        if (recordingCountInBeats == 1)
+                            recordingCountInBeats = 0;
+                        else
+                            --recordingCountInBeats;
+                    }
+                    else
+                    {
+                        recordingStartSignal.store (true, std::memory_order_release);
+                        recordingCountIn.store (0, std::memory_order_relaxed);
+                        recordingCountInActive = false;
+                    }
+                }
 
                 if (swingOffset > 0)
                 {

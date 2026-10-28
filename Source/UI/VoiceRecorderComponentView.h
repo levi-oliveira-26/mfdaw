@@ -25,6 +25,7 @@ private:
     AudioRecorder& recorder;
 
     juce::TextButton recordButton;
+    juce::Label countInLabel;
     juce::Rectangle<int> vuArea;
     juce::Rectangle<int> waveformArea;
     std::array<float, 96> waveformEnvelope {};

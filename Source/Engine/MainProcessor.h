@@ -45,6 +45,10 @@ public:
     void requestStop() noexcept;
     void requestChordPreview (int chordIndex, bool pressed) noexcept;
     void requestNotePreview (int midiNote, bool pressed) noexcept;
+    void requestRecordingCountIn() noexcept;
+    void cancelRecordingCountIn() noexcept;
+    [[nodiscard]] int getRecordingCountIn() const noexcept { return recordingCountIn.load (std::memory_order_relaxed); }
+    [[nodiscard]] bool consumeRecordingStart() noexcept { return recordingStartSignal.exchange (false, std::memory_order_acq_rel); }
 
     /** Passo (0..15) que acabou de ser disparado, ou -1 se parado. Thread-safe. */
     [[nodiscard]] int getPlayheadStep() const noexcept { return playheadStep.load (std::memory_order_relaxed); }
@@ -132,6 +136,15 @@ private:
     // Canal Audio -> UI.
     std::atomic<int> playheadStep { -1 };
     std::atomic<std::uint32_t> droppedEvents { 0 };
+
+    // Gravacao com quatro beats de pre-roll, alinhada ao primeiro passo da
+    // proxima barra. Toda comunicacao com UI/audio usa atomicos ou a fila.
+    std::atomic<bool> recordingCountInRequested { false };
+    std::atomic<bool> recordingCountInCancelled { false };
+    std::atomic<bool> recordingStartSignal { false };
+    std::atomic<int> recordingCountIn { 0 };
+    bool recordingCountInActive { false };
+    int recordingCountInBeats { 0 };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainProcessor)
 };
