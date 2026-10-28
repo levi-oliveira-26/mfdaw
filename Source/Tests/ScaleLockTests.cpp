@@ -1,7 +1,13 @@
+#include <atomic>
+#include <mutex>
+#include <type_traits>
+
 #include <juce_core/juce_core.h>
 
 #include "Core/ProjectState.h"
 #include "Core/ScaleLock.h"
+#include "Core/SpscQueue.h"
+#include "Engine/EngineEvent.h"
 
 namespace mf::tests
 {
@@ -47,6 +53,38 @@ public:
         beginTest ("MIDI bounds are rejected safely");
         expect (! ScaleLock::isNoteInScale (-1, Key::C, Scale::Major));
         expect (! ScaleLock::isNoteInScale (128, Key::C, Scale::Major));
+
+        beginTest ("Piano Roll routing blocks C sharp and delivers C in C major");
+        ProjectState pianoRollState;
+        pianoRollState.setKey (0, Scale::Major);
+        SpscQueue<EngineEvent, 16> midiQueue;
+
+        enqueueNoteIfAllowed (midiQueue, 61, pianoRollState);
+        expectEquals (midiQueue.approxSize(), std::size_t { 0 });
+
+        enqueueNoteIfAllowed (midiQueue, 60, pianoRollState);
+        expectEquals (midiQueue.approxSize(), std::size_t { 1 });
+
+        EngineEvent delivered;
+        expect (midiQueue.pop (delivered));
+        expect (delivered.type == EngineEvent::Type::ChordNote);
+        expectEquals (delivered.a, 60);
+        expectEquals (delivered.b, 1);
+
+        beginTest ("Piano Roll lock-free routing uses fixed allocation-free events");
+        expect (std::is_trivially_copyable_v<EngineEvent>);
+        expect (std::is_trivially_destructible_v<EngineEvent>);
+        expect (std::atomic<std::size_t>::is_always_lock_free);
+        expect (! std::is_same_v<SpscQueue<EngineEvent, 16>, std::mutex>);
+    }
+
+private:
+    static void enqueueNoteIfAllowed (SpscQueue<EngineEvent, 16>& queue,
+                                      int midiNote,
+                                      const ProjectState& state) noexcept
+    {
+        if (ScaleLock::isNoteInScale (midiNote, state))
+            juce::ignoreUnused (queue.push (EngineEvent::chordNote (midiNote, true)));
     }
 };
 
