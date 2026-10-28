@@ -93,6 +93,7 @@ ProjectState::ProjectState()
     session.setProperty (IDs::currentStep, 1, nullptr);
     session.setProperty (IDs::freeMode, false, nullptr);
     session.setProperty (IDs::playing, false, nullptr);
+    session.setProperty (IDs::recording, false, nullptr);
 
     swingAmount.store (juce::jlimit (0.0f, 1.0f,
                                      static_cast<float> (tree.getProperty (IDs::swing, 0.0))),
@@ -341,6 +342,14 @@ void ProjectState::setFreeMode (bool free) { session.setProperty (IDs::freeMode,
 
 bool ProjectState::isPlaying() const { return static_cast<bool> (session.getProperty (IDs::playing, false)); }
 void ProjectState::setPlaying (bool shouldPlay) { session.setProperty (IDs::playing, shouldPlay, nullptr); }
+bool ProjectState::isRecording() const noexcept
+{
+    return static_cast<bool> (session.getProperty (IDs::recording, false));
+}
+void ProjectState::setRecording (bool shouldRecord)
+{
+    session.setProperty (IDs::recording, shouldRecord, nullptr);
+}
 
 // ---------------------------------------------------------------------------
 // Persistência (Card 0.2)

@@ -11,7 +11,9 @@ namespace mf
 // Construção / destruição  (MESSAGE THREAD)
 // ===========================================================================
 MainProcessor::MainProcessor()
-    : juce::AudioProcessor (BusesProperties().withOutput ("Output", juce::AudioChannelSet::stereo(), true))
+    : juce::AudioProcessor (BusesProperties()
+                            .withInput ("Input", juce::AudioChannelSet::stereo(), true)
+                            .withOutput ("Output", juce::AudioChannelSet::stereo(), true))
 {
     voices[0].setKind (DrumVoice::Kind::Kick);
     voices[1].setKind (DrumVoice::Kind::Snare);
@@ -25,6 +27,7 @@ MainProcessor::MainProcessor()
         trackVelocities.fill (100);
 
     recomputeTiming();
+    audioRecorder.prepare (sampleRate, 0);
 
     projectState.getTree().addListener (this);
     projectState.getSession().addListener (this);
@@ -126,6 +129,17 @@ void MainProcessor::valueTreePropertyChanged (juce::ValueTree& changedTree, cons
     {
         if (property == IDs::playing)
             post (EngineEvent::setPlaying (projectState.isPlaying()));
+        else if (property == IDs::recording)
+        {
+            if (projectState.isRecording())
+            {
+                const auto destination = juce::File::getSpecialLocation (juce::File::tempDirectory)
+                                             .getChildFile ("mfdaw-recording.wav");
+                audioRecorder.startRecording (destination);
+            }
+            else
+                audioRecorder.stopRecording();
+        }
     }
     else if (changedTree.hasType (IDs::track))
     {
@@ -167,6 +181,7 @@ void MainProcessor::valueTreeRedirected (juce::ValueTree&)
 void MainProcessor::prepareToPlay (double newSampleRate, int /*samplesPerBlock*/)
 {
     sampleRate = newSampleRate > 0.0 ? newSampleRate : 44100.0;
+    audioRecorder.prepare (sampleRate, 0);
 
     for (auto& voice : voices)
         voice.prepare (sampleRate);
@@ -176,8 +191,13 @@ void MainProcessor::prepareToPlay (double newSampleRate, int /*samplesPerBlock*/
 
 bool MainProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
 {
+    const auto& in = layouts.getMainInputChannelSet();
     const auto& out = layouts.getMainOutputChannelSet();
-    return out == juce::AudioChannelSet::stereo() || out == juce::AudioChannelSet::mono();
+    const bool inSupported = in.isDisabled() || in == juce::AudioChannelSet::stereo()
+                          || in == juce::AudioChannelSet::mono();
+    const bool outSupported = out == juce::AudioChannelSet::stereo()
+                           || out == juce::AudioChannelSet::mono();
+    return inSupported && outSupported;
 }
 
 // ===========================================================================
@@ -308,6 +328,8 @@ void MainProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBu
     // Eventos MIDI de entrada serão tratados nos Passos 2/3 (acordes / piano roll).
 
     drainEvents();
+    if (audioRecorder.isRecording())
+        audioRecorder.pushAudio (buffer);
     buffer.clear();
 
     const int numSamples  = buffer.getNumSamples();

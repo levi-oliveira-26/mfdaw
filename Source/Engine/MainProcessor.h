@@ -8,6 +8,7 @@
 #include "Core/ProjectState.h"
 #include "Core/SpscQueue.h"
 #include "Engine/DrumVoice.h"
+#include "Engine/AudioRecorder.h"
 #include "Engine/EngineEvent.h"
 #include "Engine/SampleManager.h"
 
@@ -95,6 +96,7 @@ private:
 
     ProjectState projectState;
     SampleManager sampleManager;
+    AudioRecorder audioRecorder;
     SpscQueue<EngineEvent, 1024> uiToAudio;
 
     // Estado exclusivo da audio thread (cópias locais; nunca acessadas pela UI).

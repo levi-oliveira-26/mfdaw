@@ -43,6 +43,7 @@ namespace IDs
     inline const juce::Identifier currentStep { "currentStep" }; // 1..5 (Wizard)
     inline const juce::Identifier freeMode    { "freeMode" };    // Wizard <-> Timeline
     inline const juce::Identifier playing     { "playing" };
+    inline const juce::Identifier recording   { "recording" };
 }
 
 /**
@@ -116,6 +117,8 @@ public:
     void               setFreeMode (bool free);
     [[nodiscard]] bool isPlaying() const;
     void               setPlaying (bool shouldPlay);
+    [[nodiscard]] bool isRecording() const noexcept;
+    void               setRecording (bool shouldRecord);
 
     // --- Persistência e estado "sujo" (Card 0.2) ---
     [[nodiscard]] bool isModified() const noexcept { return modified.load (std::memory_order_acquire); }

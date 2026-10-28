@@ -54,6 +54,7 @@ target_sources(MFDaw PRIVATE
     Source/Core/ChordGenerator.cpp
     Source/Core/ScaleLock.cpp
     Source/Core/ProjectState.cpp
+    Source/Engine/AudioRecorder.cpp
     Source/Engine/MainProcessor.cpp
     Source/UI/StepGridComponent.cpp
     Source/UI/SmartChordsComponent.cpp
@@ -79,6 +80,7 @@ add_executable(MFDawTests
     Source/Core/ChordGenerator.cpp
     Source/Core/ScaleLock.cpp
     Source/Core/ProjectState.cpp
+    Source/Engine/AudioRecorder.cpp
     Source/Engine/MainProcessor.cpp
     Source/UI/StepGridComponent.cpp
     Source/UI/SmartChordsComponent.cpp
