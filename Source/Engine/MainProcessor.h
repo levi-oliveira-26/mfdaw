@@ -42,6 +42,7 @@ public:
     [[nodiscard]] double getSampleRate() const noexcept { return sampleRate; }
     void requestStop() noexcept;
     void requestChordPreview (int chordIndex, bool pressed) noexcept;
+    void requestNotePreview (int midiNote, bool pressed) noexcept;
 
     /** Passo (0..15) que acabou de ser disparado, ou -1 se parado. Thread-safe. */
     [[nodiscard]] int getPlayheadStep() const noexcept { return playheadStep.load (std::memory_order_relaxed); }

@@ -19,8 +19,8 @@ juce::Rectangle<int> gridBounds (const juce::Component& component)
 }
 } // namespace
 
-PianoRollComponent::PianoRollComponent (ProjectState& projectState)
-    : state (projectState)
+PianoRollComponent::PianoRollComponent (ProjectState& projectState, MainProcessor& processor)
+    : state (projectState), processor (processor)
 {
     notes[4][0] = true;
     notes[3][4] = true;
@@ -106,11 +106,11 @@ void PianoRollComponent::resized()
 {
 }
 
-void PianoRollComponent::toggleNote (const juce::Point<int>& position)
+int PianoRollComponent::noteAt (const juce::Point<int>& position, int* rowOut, int* stepOut) const
 {
     const auto grid = gridBounds (*this);
     if (! grid.contains (position))
-        return;
+        return -1;
 
     const float cellWidth = static_cast<float> (grid.getWidth()) / numSteps;
     const float cellHeight = static_cast<float> (grid.getHeight()) / numRows;
@@ -120,23 +120,88 @@ void PianoRollComponent::toggleNote (const juce::Point<int>& position)
                                   static_cast<int> ((position.y - grid.getY()) / cellHeight));
     const int midiNote = kTopOctaveNote - row;
 
-    if (! ScaleLock::isNoteInScale (midiNote, state))
-        return;
+    if (rowOut != nullptr)
+        *rowOut = row;
+    if (stepOut != nullptr)
+        *stepOut = step;
+
+    return ScaleLock::isNoteInScale (midiNote, state) ? midiNote : -1;
+}
+
+int PianoRollComponent::toggleNote (const juce::Point<int>& position)
+{
+    int row = 0;
+    int step = 0;
+    const int midiNote = noteAt (position, &row, &step);
+    if (midiNote < 0)
+        return -1;
 
     auto& active = notes[static_cast<size_t> (row)][static_cast<size_t> (step)];
     active = ! active;
-    repaint (grid);
+    repaint (gridBounds (*this));
+    return midiNote;
 }
 
 void PianoRollComponent::mouseDown (const juce::MouseEvent& event)
 {
-    toggleNote (event.getPosition());
+    if (! event.mods.isLeftButtonDown())
+        return;
+
+    if (previewNote >= 0)
+        processor.requestNotePreview (previewNote, false);
+
+    previewNote = toggleNote (event.getPosition());
+
+    if (previewNote >= 0)
+    {
+        juce::ignoreUnused (noteAt (event.getPosition(), &previewRow, &previewStep));
+        processor.requestNotePreview (previewNote, true);
+    }
+    else
+    {
+        previewRow = -1;
+        previewStep = -1;
+    }
 }
 
 void PianoRollComponent::mouseDrag (const juce::MouseEvent& event)
 {
-    if (event.mods.isLeftButtonDown())
-        toggleNote (event.getPosition());
+    if (! event.mods.isLeftButtonDown())
+        return;
+
+    int row = 0;
+    int step = 0;
+    const int nextNote = noteAt (event.getPosition(), &row, &step);
+
+    if (row == previewRow && step == previewStep)
+        return;
+
+    if (previewNote >= 0 && nextNote != previewNote)
+        processor.requestNotePreview (previewNote, false);
+
+    previewRow = row;
+    previewStep = step;
+
+    if (nextNote >= 0)
+    {
+        notes[static_cast<size_t> (row)][static_cast<size_t> (step)] = true;
+        repaint (gridBounds (*this));
+
+        if (nextNote != previewNote)
+            processor.requestNotePreview (nextNote, true);
+    }
+
+    previewNote = nextNote;
+}
+
+void PianoRollComponent::mouseUp (const juce::MouseEvent&)
+{
+    if (previewNote >= 0)
+        processor.requestNotePreview (previewNote, false);
+
+    previewNote = -1;
+    previewRow = -1;
+    previewStep = -1;
 }
 
 void PianoRollComponent::valueTreePropertyChanged (juce::ValueTree&, const juce::Identifier& property)

@@ -89,6 +89,12 @@ void MainProcessor::PreviewVoice::start (int midiNote, float gain) noexcept
     velocity = gain;
 }
 
+void MainProcessor::requestNotePreview (int midiNote, bool pressed) noexcept
+{
+    if (midiNote >= 0 && midiNote <= 127)
+        post (EngineEvent::chordNote (midiNote, pressed));
+}
+
 void MainProcessor::post (const EngineEvent& event) noexcept
 {
     if (! uiToAudio.push (event))
