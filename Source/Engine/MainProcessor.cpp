@@ -42,6 +42,11 @@ MainProcessor::~MainProcessor()
 // ===========================================================================
 // Ponte ValueTree -> Fila lock-free  (MESSAGE THREAD, único produtor)
 // ===========================================================================
+void MainProcessor::requestStop() noexcept
+{
+    post (EngineEvent::stop());
+}
+
 void MainProcessor::post (const EngineEvent& event) noexcept
 {
     if (! uiToAudio.push (event))
@@ -151,21 +156,27 @@ void MainProcessor::drainEvents() noexcept
 
             case EngineEvent::Type::SetPlaying:
             {
-                const bool shouldPlay = event.a != 0;
-
-                if (shouldPlay && ! playing)
+                if (event.a == 2)
                 {
+                    playing = false;
                     nextStep = 0;
-                    samplesToNextStep = 0.0; // dispara o passo 1 imediatamente
-                }
-                else if (! shouldPlay)
-                {
+                    playheadSampleIndex = 0;
+                    samplesToNextStep = 0.0;
                     swingTriggerCountdown = -1;
                     swingTriggerStep = -1;
                     playheadStep.store (-1, std::memory_order_relaxed);
                 }
-
-                playing = shouldPlay;
+                else if (event.a == 1)
+                {
+                    playing = true;
+                }
+                else
+                {
+                    playing = false;
+                    swingTriggerCountdown = -1;
+                    swingTriggerStep = -1;
+                    playheadStep.store (-1, std::memory_order_relaxed);
+                }
                 break;
             }
 
@@ -228,6 +239,9 @@ void MainProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBu
 
     for (int i = 0; i < numSamples; ++i)
     {
+        if (playing)
+            ++playheadSampleIndex;
+
         if (swingTriggerCountdown >= 0)
         {
             --swingTriggerCountdown;

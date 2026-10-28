@@ -64,6 +64,52 @@ public:
         return theme::makeFont (15.0f, true);
     }
 
+    void drawButtonText (juce::Graphics& g, juce::TextButton& button,
+                         bool shouldDrawButtonAsHighlighted,
+                         bool shouldDrawButtonAsDown) override
+    {
+        const auto id = button.getComponentID();
+        if (id != "transport-play" && id != "transport-pause" && id != "transport-stop")
+        {
+            juce::LookAndFeel_V4::drawButtonText (g, button,
+                                                   shouldDrawButtonAsHighlighted,
+                                                   shouldDrawButtonAsDown);
+            return;
+        }
+
+        const auto bounds = button.getLocalBounds().toFloat().reduced (8.0f);
+        g.setColour (button.findColour (juce::TextButton::textColourOffId));
+
+        if (id == "transport-play")
+        {
+            const float size = juce::jmin (bounds.getWidth(), bounds.getHeight()) * 0.58f;
+            juce::Path play;
+            play.addTriangle (bounds.getCentreX() - size * 0.42f,
+                              bounds.getCentreY() - size * 0.58f,
+                              bounds.getCentreX() - size * 0.42f,
+                              bounds.getCentreY() + size * 0.58f,
+                              bounds.getCentreX() + size * 0.58f,
+                              bounds.getCentreY());
+            g.fillPath (play);
+        }
+        else if (id == "transport-pause")
+        {
+            const float height = juce::jmin (bounds.getWidth(), bounds.getHeight()) * 0.62f;
+            const float width = height * 0.18f;
+            const float gap = height * 0.25f;
+            g.fillRect (bounds.getCentreX() - gap - width, bounds.getCentreY() - height * 0.5f,
+                        width, height);
+            g.fillRect (bounds.getCentreX() + gap, bounds.getCentreY() - height * 0.5f,
+                        width, height);
+        }
+        else if (id == "transport-stop")
+        {
+            const float size = juce::jmin (bounds.getWidth(), bounds.getHeight()) * 0.48f;
+            g.fillRect (bounds.getCentreX() - size * 0.5f,
+                        bounds.getCentreY() - size * 0.5f, size, size);
+        }
+    }
+
     void drawRotarySlider (juce::Graphics& g, int x, int y, int width, int height,
                            float sliderPos, float rotaryStartAngle,
                            float rotaryEndAngle, juce::Slider& slider) override

@@ -45,16 +45,20 @@ MainEditor::MainEditor (MainProcessor& processorToEdit)
     brandLabel.setFont (makeFont (22.0f, true));
     addAndMakeVisible (brandLabel);
 
-    playButton.setButtonText (txt ("Play"));
+    playButton.setComponentID ("transport-play");
     playButton.onClick = [this] { state.setPlaying (true); };
     addAndMakeVisible (playButton);
 
-    pauseButton.setButtonText (txt ("Pause"));
+    pauseButton.setComponentID ("transport-pause");
     pauseButton.onClick = [this] { state.setPlaying (false); };
     addAndMakeVisible (pauseButton);
 
-    stopButton.setButtonText (txt ("Stop"));
-    stopButton.onClick = [this] { state.setPlaying (false); };
+    stopButton.setComponentID ("transport-stop");
+    stopButton.onClick = [this]
+    {
+        engine.requestStop();
+        state.setPlaying (false);
+    };
     addAndMakeVisible (stopButton);
 
     bpmSlider.setSliderStyle (juce::Slider::IncDecButtons);

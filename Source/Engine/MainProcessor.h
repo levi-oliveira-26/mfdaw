@@ -40,6 +40,7 @@ public:
     [[nodiscard]] ProjectState& getProjectState() noexcept { return projectState; }
     [[nodiscard]] SampleManager& getSampleManager() noexcept { return sampleManager; }
     [[nodiscard]] double getSampleRate() const noexcept { return sampleRate; }
+    void requestStop() noexcept;
 
     /** Passo (0..15) que acabou de ser disparado, ou -1 se parado. Thread-safe. */
     [[nodiscard]] int getPlayheadStep() const noexcept { return playheadStep.load (std::memory_order_relaxed); }
@@ -99,6 +100,7 @@ private:
     int bpm { 120 };
     bool playing { false };
     int nextStep { 0 };
+    std::int64_t playheadSampleIndex { 0 };
     double samplesPerStep { 0.0 };
     double samplesToNextStep { 0.0 };
     int swingTriggerCountdown { -1 };
