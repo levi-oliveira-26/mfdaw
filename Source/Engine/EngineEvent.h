@@ -14,21 +14,28 @@ namespace mf
  *
  *   SetBpm       : a = BPM
  *   SetPlaying   : a = 1 (tocar) ou 0 (parar)
- *   SetTrackMask : a = índice da pista (0..3), b = máscara de 16 bits dos passos
+ *   SetTrackMask  : a = pista, b = máscara de 16 bits dos passos
+ *   SetStepVelocity: a = pista, b = passo, c = velocity MIDI (0..127)
  */
 struct EngineEvent
 {
-    enum class Type : std::uint8_t { SetBpm, SetPlaying, SetTrackMask };
+    enum class Type : std::uint8_t { SetBpm, SetPlaying, SetTrackMask, SetStepVelocity };
 
     Type type { Type::SetBpm };
     std::int32_t a { 0 };
     std::int32_t b { 0 };
+    std::int32_t c { 0 };
 
     [[nodiscard]] static EngineEvent setBpm (int bpm) noexcept       { return { Type::SetBpm, bpm, 0 }; }
     [[nodiscard]] static EngineEvent setPlaying (bool on) noexcept   { return { Type::SetPlaying, on ? 1 : 0, 0 }; }
     [[nodiscard]] static EngineEvent setTrackMask (int track, int mask) noexcept
     {
-        return { Type::SetTrackMask, track, mask };
+        return { Type::SetTrackMask, track, mask, 0 };
+    }
+
+    [[nodiscard]] static EngineEvent setStepVelocity (int track, int step, int velocity) noexcept
+    {
+        return { Type::SetStepVelocity, track, step, velocity };
     }
 };
 

@@ -1,5 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 project(MFDaw VERSION 0.1.0 LANGUAGES CXX)
+enable_testing()
 if(MSVC)
     add_compile_options(/bigobj /Zm200)
 endif()
@@ -65,6 +66,37 @@ target_compile_definitions(MFDaw PUBLIC
 
 # MSVC: fontes em UTF-8 (strings com acentos na UI)
 target_compile_options(MFDaw PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
+
+add_executable(MFDawTests
+    Source/Tests/RunStepSequencerTests.cpp
+    Source/Tests/StepSequencerTests.cpp
+    Source/Core/ProjectState.cpp
+    Source/Engine/MainProcessor.cpp
+    Source/UI/StepGridComponent.cpp
+    Source/UI/MainEditor.cpp)
+
+target_include_directories(MFDawTests PRIVATE Source)
+target_compile_options(MFDawTests PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
+target_compile_definitions(MFDawTests PRIVATE
+    JUCE_WEB_BROWSER=0
+    JUCE_USE_CURL=0
+    JUCE_STANDALONE_APPLICATION=1)
+
+target_link_libraries(MFDawTests PRIVATE
+    juce::juce_audio_basics
+    juce::juce_audio_devices
+    juce::juce_audio_formats
+    juce::juce_audio_processors
+    juce::juce_audio_utils
+    juce::juce_core
+    juce::juce_data_structures
+    juce::juce_events
+    juce::juce_graphics
+    juce::juce_gui_basics
+    juce::juce_gui_extra
+    juce::juce_recommended_config_flags)
+
+add_test(NAME MFDaw_Rhythm_Tests COMMAND MFDawTests)
 
 target_link_libraries(MFDaw
     PRIVATE

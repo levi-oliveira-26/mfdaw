@@ -1,6 +1,7 @@
 #include "Engine/MainProcessor.h"
 
 #include <algorithm>
+#include <cmath>
 
 #include "UI/MainEditor.h"
 
@@ -19,6 +20,9 @@ MainProcessor::MainProcessor()
 
     for (auto& voice : voices)
         voice.prepare (sampleRate);
+
+    for (auto& trackVelocities : velocities)
+        trackVelocities.fill (100);
 
     recomputeTiming();
 
@@ -50,7 +54,12 @@ void MainProcessor::pushFullState()
     post (EngineEvent::setPlaying (projectState.isPlaying()));
 
     for (int track = 0; track < kNumTracks; ++track)
+    {
         post (EngineEvent::setTrackMask (track, projectState.getTrackMask (track)));
+
+        for (int step = 0; step < kNumSteps; ++step)
+            post (EngineEvent::setStepVelocity (track, step, projectState.getStepVelocity (track, step)));
+    }
 }
 
 void MainProcessor::valueTreePropertyChanged (juce::ValueTree& changedTree, const juce::Identifier& property)
@@ -65,12 +74,19 @@ void MainProcessor::valueTreePropertyChanged (juce::ValueTree& changedTree, cons
         if (property == IDs::playing)
             post (EngineEvent::setPlaying (projectState.isPlaying()));
     }
-    else if (changedTree.hasType (IDs::track) && property == IDs::mask)
+    else if (changedTree.hasType (IDs::track))
     {
         const int track = changedTree.getParent().indexOf (changedTree);
 
-        if (track >= 0 && track < kNumTracks)
+        if (property == IDs::mask && track >= 0 && track < kNumTracks)
             post (EngineEvent::setTrackMask (track, projectState.getTrackMask (track)));
+        else if (property.toString().startsWith ("velocity") && track >= 0 && track < kNumTracks)
+        {
+            const int step = property.toString().substring (8).getIntValue();
+
+            if (step >= 0 && step < kNumSteps)
+                post (EngineEvent::setStepVelocity (track, step, projectState.getStepVelocity (track, step)));
+        }
     }
 }
 
@@ -144,6 +160,8 @@ void MainProcessor::drainEvents() noexcept
                 }
                 else if (! shouldPlay)
                 {
+                    swingTriggerCountdown = -1;
+                    swingTriggerStep = -1;
                     playheadStep.store (-1, std::memory_order_relaxed);
                 }
 
@@ -155,18 +173,48 @@ void MainProcessor::drainEvents() noexcept
                 if (event.a >= 0 && event.a < kNumTracks)
                     masks[static_cast<std::size_t> (event.a)] = static_cast<int> (event.b);
                 break;
+
+            case EngineEvent::Type::SetStepVelocity:
+                if (event.a >= 0 && event.a < kNumTracks
+                    && event.b >= 0 && event.b < kNumSteps
+                    && event.c >= 0 && event.c <= 127)
+                {
+                    velocities[static_cast<std::size_t> (event.a)][static_cast<std::size_t> (event.b)]
+                        = static_cast<std::uint8_t> (event.c);
+                }
+                break;
         }
     }
+}
+
+int MainProcessor::getSwingOffsetSamples (int step) const noexcept
+{
+    if ((step & 1) == 0)
+        return 0;
+
+    const float amount = juce::jlimit (0.0f, 1.0f, projectState.getSwingAmount());
+    const double maximumOffset = samplesPerStep * 0.5;
+    return juce::jlimit (0, static_cast<int> (samplesPerStep * 0.5),
+                         static_cast<int> (std::round (maximumOffset * amount)));
 }
 
 void MainProcessor::triggerStep (int step) noexcept
 {
     for (std::size_t track = 0; track < static_cast<std::size_t> (kNumTracks); ++track)
+    {
         if (((masks[track] >> step) & 1) != 0)
-            voices[track].trigger();
+        {
+            velocityGains[track] = static_cast<float> (velocities[track][static_cast<std::size_t> (step)]) / 127.0f;
+            activeSamples[track] = sampleManager.getSample (static_cast<int> (track));
+            samplePositions[track] = 0.0f;
+
+            if (activeSamples[track] == nullptr)
+                voices[track].trigger();
+        }
+    }
 }
 
-void MainProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& /*midi*/)
+void MainProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
 {
     juce::ScopedNoDenormals noDenormals;
 
@@ -180,13 +228,56 @@ void MainProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBu
 
     for (int i = 0; i < numSamples; ++i)
     {
+        if (swingTriggerCountdown >= 0)
+        {
+            --swingTriggerCountdown;
+
+            if (swingTriggerCountdown <= 0)
+            {
+                triggerStep (swingTriggerStep);
+
+                for (int track = 0; track < kNumTracks; ++track)
+                {
+                    if (((masks[static_cast<std::size_t> (track)] >> swingTriggerStep) & 1) != 0)
+                    {
+                        const auto note = juce::MidiMessage::noteOn (10, 36 + track, 1.0f);
+                        midi.addEvent (note, i);
+                    }
+                }
+
+                swingTriggerCountdown = -1;
+                swingTriggerStep = -1;
+            }
+        }
+
         if (playing)
         {
             if (samplesToNextStep <= 0.0)
             {
-                triggerStep (nextStep);
-                playheadStep.store (nextStep, std::memory_order_relaxed);
-                nextStep = (nextStep + 1) % kNumSteps;
+                const int scheduledStep = nextStep;
+                const int swingOffset = getSwingOffsetSamples (scheduledStep);
+
+                if (swingOffset > 0)
+                {
+                    swingTriggerStep = scheduledStep;
+                    swingTriggerCountdown = swingOffset;
+                }
+                else
+                {
+                    triggerStep (scheduledStep);
+
+                    for (int track = 0; track < kNumTracks; ++track)
+                    {
+                        if (((masks[static_cast<std::size_t> (track)] >> scheduledStep) & 1) != 0)
+                        {
+                            const auto note = juce::MidiMessage::noteOn (10, 36 + track, 1.0f);
+                            midi.addEvent (note, i);
+                        }
+                    }
+                }
+
+                playheadStep.store (scheduledStep, std::memory_order_relaxed);
+                nextStep = (scheduledStep + 1) % kNumSteps;
                 samplesToNextStep += samplesPerStep;
             }
 
@@ -194,8 +285,52 @@ void MainProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBu
         }
 
         float mix = 0.0f;
-        for (auto& voice : voices)
-            mix += voice.process();
+        for (std::size_t track = 0; track < static_cast<std::size_t> (kNumTracks); ++track)
+        {
+            if (activeSamples[track] != nullptr)
+            {
+                const auto& sampleBuffer = activeSamples[track]->buffer;
+                const int sampleCount = sampleBuffer.getNumSamples();
+                const int position = static_cast<int> (samplePositions[track]);
+
+                if (position < sampleCount)
+                {
+                    const float fraction = samplePositions[track] - static_cast<float> (position);
+                    const int nextPosition = juce::jmin (sampleCount - 1, position + 1);
+                    float sample = 0.0f;
+
+                    for (int channel = 0; channel < sampleBuffer.getNumChannels(); ++channel)
+                    {
+                        const float a = sampleBuffer.getSample (channel, position);
+                        const float b = sampleBuffer.getSample (channel, nextPosition);
+                        sample += a + fraction * (b - a);
+                    }
+
+                    sample /= static_cast<float> (juce::jmax (1, sampleBuffer.getNumChannels()));
+
+                    constexpr int fadeSamples = 32;
+                    const int remaining = sampleCount - position;
+                    const float startFade = juce::jmin (1.0f,
+                                                        static_cast<float> (position + 1) / fadeSamples);
+                    const float endFade = juce::jmin (1.0f,
+                                                      static_cast<float> (remaining) / fadeSamples);
+                    sample *= juce::jmin (startFade, endFade);
+
+                    mix += sample * velocityGains[track];
+                    juce::ignoreUnused (voices[track].process()); // drena envelopes sintéticas durante custom sample playback
+                    samplePositions[track] += 1.0f;
+                }
+                else
+                {
+                    activeSamples[track].reset();
+                }
+            }
+            else
+            {
+                const float voiceSample = voices[track].process();
+                mix += voiceSample * velocityGains[track];
+            }
+        }
 
         mix = std::clamp (mix * kMasterGain, -1.0f, 1.0f);
 

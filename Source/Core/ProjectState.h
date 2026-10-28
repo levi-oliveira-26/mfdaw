@@ -8,7 +8,7 @@ namespace mf
 // ---------------------------------------------------------------------------
 // Constantes de domínio (limites do MVP — Card 0.1 / 1.1)
 // ---------------------------------------------------------------------------
-inline constexpr int kNumTracks      = 4;    // Kick, Snare, Hi-Hat, Perc
+inline constexpr int kNumTracks      = 16;   // pistas do sequenciador 16 x 16
 inline constexpr int kNumSteps       = 16;   // passos do sequenciador
 inline constexpr int kNumWizardSteps = 5;    // Ritmo, Harmonia, Melodia, Voz, Mix
 inline constexpr int kMinBpm         = 40;
@@ -82,11 +82,25 @@ public:
     void setKey (int root, Scale newScale);
     void setSampleRate (double newRate);
 
+    // --- Groove do step sequencer (Card R-04) ---
+    [[nodiscard]] float getSwingAmount() const noexcept
+    {
+        return swingAmount.load (std::memory_order_acquire);
+    }
+
+    void setSwingAmount (float newAmount) noexcept
+    {
+        swingAmount.store (juce::jlimit (0.0f, 1.0f, newAmount),
+                           std::memory_order_release);
+    }
+
     // --- Step sequencer (Card 1.1) ---
     [[nodiscard]] juce::String getTrackName (int track) const;
     [[nodiscard]] int          getTrackMask (int track) const;
     [[nodiscard]] bool         isStepActive (int track, int step) const;
     void toggleStep (int track, int step);
+    [[nodiscard]] int  getStepVelocity (int track, int step) const;
+    void               setStepVelocity (int track, int step, int velocity);
 
     // --- Sessão (transitória) ---
     [[nodiscard]] int  getCurrentStep() const;     // 1..5
@@ -121,6 +135,7 @@ private:
     juce::ValueTree session;
     juce::UndoManager undoManager;
     std::atomic<bool> modified { false };
+    std::atomic<float> swingAmount { 0.0f };
 };
 
 } // namespace mf

@@ -4,9 +4,19 @@ namespace mf
 {
 namespace
 {
-constexpr const char* kDefaultTrackNames[kNumTracks] = { "Kick", "Snare", "Hi-Hat", "Perc" };
+constexpr const char* kDefaultTrackNames[kNumTracks] = {
+    "Kick", "Snare", "Hi-Hat", "Perc",
+    "Track 05", "Track 06", "Track 07", "Track 08",
+    "Track 09", "Track 10", "Track 11", "Track 12",
+    "Track 13", "Track 14", "Track 15", "Track 16"
+};
 
 [[nodiscard]] bool isTrackValid (int track) noexcept { return track >= 0 && track < kNumTracks; }
+
+[[nodiscard]] juce::Identifier velocityProperty (int step)
+{
+    return juce::Identifier ("velocity" + juce::String (step));
+}
 
 [[nodiscard]] juce::var valueTreeToJson (const juce::ValueTree& source)
 {
@@ -125,6 +135,16 @@ void ProjectState::ensureStructure()
         newTrack.setProperty (IDs::mask, 0, nullptr);
         sequencer.appendChild (newTrack, nullptr);
     }
+
+    for (int track = 0; track < kNumTracks; ++track)
+    {
+        auto trackTree = sequencer.getChild (track);
+        for (int step = 0; step < kNumSteps; ++step)
+        {
+            if (! trackTree.hasProperty (velocityProperty (step)))
+                trackTree.setProperty (velocityProperty (step), 100, nullptr);
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -202,6 +222,24 @@ void ProjectState::toggleStep (int track, int step)
 
     auto trackTree = tree.getChildWithName (IDs::sequencer).getChild (track);
     trackTree.setProperty (IDs::mask, getTrackMask (track) ^ (1 << step), &undoManager);
+}
+
+int ProjectState::getStepVelocity (int track, int step) const
+{
+    if (! isTrackValid (track) || step < 0 || step >= kNumSteps)
+        return 100;
+
+    const auto trackTree = tree.getChildWithName (IDs::sequencer).getChild (track);
+    return juce::jlimit (0, 127, static_cast<int> (trackTree.getProperty (velocityProperty (step), 100)));
+}
+
+void ProjectState::setStepVelocity (int track, int step, int velocity)
+{
+    if (! isTrackValid (track) || step < 0 || step >= kNumSteps)
+        return;
+
+    auto trackTree = tree.getChildWithName (IDs::sequencer).getChild (track);
+    trackTree.setProperty (velocityProperty (step), juce::jlimit (0, 127, velocity), &undoManager);
 }
 
 // ---------------------------------------------------------------------------

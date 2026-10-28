@@ -63,6 +63,41 @@ public:
     {
         return theme::makeFont (15.0f, true);
     }
+
+    void drawRotarySlider (juce::Graphics& g, int x, int y, int width, int height,
+                           float sliderPos, float rotaryStartAngle,
+                           float rotaryEndAngle, juce::Slider& slider) override
+    {
+        juce::ignoreUnused (slider);
+
+        const auto bounds = juce::Rectangle<int> (x, y, width, height).toFloat().reduced (4.0f);
+        const float radius = juce::jmin (bounds.getWidth(), bounds.getHeight()) * 0.5f;
+        const auto centre = bounds.getCentre();
+        const float angle = rotaryStartAngle + sliderPos * (rotaryEndAngle - rotaryStartAngle);
+
+        juce::Path track;
+        track.addCentredArc (centre.x, centre.y, radius, radius,
+                             0.0f, rotaryStartAngle, rotaryEndAngle, true);
+        g.setColour (juce::Colour (0xff444444));
+        g.strokePath (track, juce::PathStrokeType (3.0f));
+
+        juce::Path valueTrack;
+        valueTrack.addCentredArc (centre.x, centre.y, radius, radius,
+                                  0.0f, rotaryStartAngle, angle, true);
+        g.setColour (juce::Colour (0xffff4c4c));
+        g.strokePath (valueTrack, juce::PathStrokeType (3.0f));
+
+        g.setColour (juce::Colour (0xffd9d9d9));
+        g.fillEllipse (centre.x - radius * 0.58f, centre.y - radius * 0.58f,
+                       radius * 1.16f, radius * 1.16f);
+
+        g.setColour (juce::Colours::white);
+        juce::Line<float> pointer (centre.getX(), centre.getY(),
+                                   centre.getX(), centre.getY() - radius * 0.42f);
+        pointer.applyTransform (juce::AffineTransform::rotation (angle,
+                                                                  centre.getX(), centre.getY()));
+        g.drawLine (pointer, 2.0f);
+    }
 };
 
 } // namespace mf

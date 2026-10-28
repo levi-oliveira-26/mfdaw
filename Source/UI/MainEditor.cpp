@@ -33,7 +33,8 @@ MainEditor::MainEditor (MainProcessor& processorToEdit)
     : juce::AudioProcessorEditor (processorToEdit),
       engine (processorToEdit),
       state (processorToEdit.getProjectState()),
-      stepGrid (processorToEdit.getProjectState())
+      stepGrid (processorToEdit.getProjectState(), processorToEdit.getSampleManager(),
+                processorToEdit.getSampleRate())
 {
     setLookAndFeel (&laf);
 

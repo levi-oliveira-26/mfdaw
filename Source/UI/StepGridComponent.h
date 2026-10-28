@@ -1,8 +1,11 @@
 #pragma once
 
+#include <memory>
+
 #include <juce_gui_basics/juce_gui_basics.h>
 
 #include "Core/ProjectState.h"
+#include "Engine/SampleManager.h"
 
 namespace mf
 {
@@ -15,20 +18,26 @@ namespace mf
  * EngineEvent na fila lock-free.
  */
 class StepGridComponent final : public juce::Component,
-                                private juce::ValueTree::Listener
+                                private juce::ValueTree::Listener,
+                                public juce::Slider::Listener
 {
 public:
-    explicit StepGridComponent (ProjectState& stateToUse);
+    StepGridComponent (ProjectState& stateToUse, SampleManager& sampleManagerToUse,
+                      double targetSampleRateToUse);
     ~StepGridComponent() override;
 
     /** Passo em execução (0..15) ou -1. Chamado pelo Timer do editor. */
     void setPlayheadStep (int step);
 
     void paint (juce::Graphics&) override;
+    void resized() override;
     void mouseDown (const juce::MouseEvent&) override;
+    void mouseDrag (const juce::MouseEvent&) override;
+    void mouseUp (const juce::MouseEvent&) override;
 
 private:
     void valueTreePropertyChanged (juce::ValueTree&, const juce::Identifier&) override;
+    void sliderValueChanged (juce::Slider* slider) override;
 
     [[nodiscard]] juce::Rectangle<float> getGridBounds() const;
     [[nodiscard]] juce::Rectangle<float> getCellBounds (int track, int step) const;
@@ -36,7 +45,14 @@ private:
     static constexpr float kLabelWidth = 96.0f;
 
     ProjectState& state;
+    SampleManager& sampleManager;
+    double targetSampleRate;
+    juce::Slider swingSlider;
+    std::unique_ptr<juce::FileChooser> fileChooser;
+    int selectedTrack { -1 };
     int playheadStep { -1 };
+    int velocityTrack { -1 };
+    int velocityStep { -1 };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (StepGridComponent)
 };

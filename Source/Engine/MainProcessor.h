@@ -9,6 +9,7 @@
 #include "Core/SpscQueue.h"
 #include "Engine/DrumVoice.h"
 #include "Engine/EngineEvent.h"
+#include "Engine/SampleManager.h"
 
 namespace mf
 {
@@ -37,6 +38,8 @@ public:
 
     // --- Acesso para a UI (message thread) ---
     [[nodiscard]] ProjectState& getProjectState() noexcept { return projectState; }
+    [[nodiscard]] SampleManager& getSampleManager() noexcept { return sampleManager; }
+    [[nodiscard]] double getSampleRate() const noexcept { return sampleRate; }
 
     /** Passo (0..15) que acabou de ser disparado, ou -1 se parado. Thread-safe. */
     [[nodiscard]] int getPlayheadStep() const noexcept { return playheadStep.load (std::memory_order_relaxed); }
@@ -83,10 +86,12 @@ private:
     void drainEvents() noexcept;
     void recomputeTiming() noexcept;
     void triggerStep (int step) noexcept;
+    [[nodiscard]] int getSwingOffsetSamples (int step) const noexcept;
 
     static constexpr float kMasterGain = 0.7f;
 
     ProjectState projectState;
+    SampleManager sampleManager;
     SpscQueue<EngineEvent, 1024> uiToAudio;
 
     // Estado exclusivo da audio thread (cópias locais; nunca acessadas pela UI).
@@ -96,7 +101,13 @@ private:
     int nextStep { 0 };
     double samplesPerStep { 0.0 };
     double samplesToNextStep { 0.0 };
+    int swingTriggerCountdown { -1 };
+    int swingTriggerStep { -1 };
     std::array<int, kNumTracks> masks {};
+    std::array<std::array<std::uint8_t, kNumSteps>, kNumTracks> velocities {};
+    std::array<float, kNumTracks> velocityGains { 1.0f };
+    std::array<float, kNumTracks> samplePositions {};
+    std::array<SampleManager::SamplePtr, kNumTracks> activeSamples {};
     std::array<DrumVoice, kNumTracks> voices {};
 
     // Canal Audio -> UI.
