@@ -23,6 +23,10 @@ namespace mf
  *  - o consumidor lê head_ com acquire, então enxerga o item completo;
  *  - simetricamente para tail_ (libera o slot de volta ao produtor).
  */
+#if defined (_MSC_VER)
+#pragma warning(push)
+#pragma warning(disable : 4324) // Alinhamento deliberado em cache lines para evitar false sharing.
+#endif
 template <typename T, std::size_t Capacity>
 class SpscQueue
 {
@@ -82,5 +86,9 @@ private:
     alignas(cacheLine) std::atomic<std::size_t> tail_ { 0 }; // escrito só pelo consumidor
     alignas(cacheLine) std::array<T, Capacity> buffer_ {};
 };
+
+#if defined (_MSC_VER)
+#pragma warning(pop)
+#endif
 
 } // namespace mf

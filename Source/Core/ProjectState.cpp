@@ -7,6 +7,63 @@ namespace
 constexpr const char* kDefaultTrackNames[kNumTracks] = { "Kick", "Snare", "Hi-Hat", "Perc" };
 
 [[nodiscard]] bool isTrackValid (int track) noexcept { return track >= 0 && track < kNumTracks; }
+
+[[nodiscard]] juce::var valueTreeToJson (const juce::ValueTree& source)
+{
+    auto* object = new juce::DynamicObject();
+    object->setProperty ("type", source.getType().toString());
+
+    auto* propertiesObject = new juce::DynamicObject();
+    for (int i = 0; i < source.getNumProperties(); ++i)
+    {
+        const auto name = source.getPropertyName (i);
+        propertiesObject->setProperty (name, source[name]);
+    }
+
+    object->setProperty ("properties", juce::var (propertiesObject));
+
+    juce::Array<juce::var> children;
+    for (int i = 0; i < source.getNumChildren(); ++i)
+        children.add (valueTreeToJson (source.getChild (i)));
+
+    object->setProperty ("children", juce::var (children));
+    return juce::var (object);
+}
+
+[[nodiscard]] juce::ValueTree valueTreeFromJson (const juce::var& json)
+{
+    const auto* object = json.getDynamicObject();
+    if (object == nullptr)
+        return juce::ValueTree();
+
+    const auto type = object->getProperty ("type").toString();
+    if (type.isEmpty())
+        return juce::ValueTree();
+
+    juce::ValueTree result { juce::Identifier (type) };
+
+    if (const auto* propertiesObject = object->getProperty ("properties").getDynamicObject())
+    {
+        const auto& properties = propertiesObject->getProperties();
+        for (int i = 0; i < properties.size(); ++i)
+        {
+            const auto name = properties.getName (i);
+            result.setProperty (name, properties[name], nullptr);
+        }
+    }
+
+    if (const auto* children = object->getProperty ("children").getArray())
+    {
+        for (const auto& childJson : *children)
+        {
+            auto child = valueTreeFromJson (childJson);
+            if (child.isValid())
+                result.appendChild (child, nullptr);
+        }
+    }
+
+    return result;
+}
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -169,20 +226,27 @@ void ProjectState::setPlaying (bool shouldPlay) { session.setProperty (IDs::play
 // ---------------------------------------------------------------------------
 // Persistência (Card 0.2)
 // ---------------------------------------------------------------------------
-std::unique_ptr<juce::XmlElement> ProjectState::createXml() const
+juce::var ProjectState::createJson() const
 {
-    return tree.createXml();
+    jassert (juce::MessageManager::getInstance()->isThisTheMessageThread());
+    return valueTreeToJson (tree);
 }
 
-bool ProjectState::loadFromXml (const juce::XmlElement& xml)
+juce::String ProjectState::createJsonString() const
 {
-    auto loaded = juce::ValueTree::fromXml (xml);
+    jassert (juce::MessageManager::getInstance()->isThisTheMessageThread());
+    return juce::JSON::toString (createJson(), true);
+}
+
+bool ProjectState::loadFromJson (const juce::var& json)
+{
+    jassert (juce::MessageManager::getInstance()->isThisTheMessageThread());
+    auto loaded = valueTreeFromJson (json);
 
     if (! loaded.isValid() || loaded.getType() != IDs::project)
         return false;
 
-    // Copia para a MESMA árvore raiz: todos os listeners (processador, UI)
-    // continuam registrados e são notificados das mudanças.
+    // Mantém a raiz existente para não perder os listeners de UI, engine e undo.
     tree.copyPropertiesAndChildrenFrom (loaded, nullptr);
     ensureStructure();
 
@@ -191,11 +255,20 @@ bool ProjectState::loadFromXml (const juce::XmlElement& xml)
     return true;
 }
 
+bool ProjectState::loadFromJsonString (const juce::String& json)
+{
+    const auto parsed = juce::JSON::parse (json);
+    return parsed.isVoid() ? false : loadFromJson (parsed);
+}
+
 bool ProjectState::saveToFile (const juce::File& file)
 {
-    const auto xml = createXml();
+    jassert (juce::MessageManager::getInstance()->isThisTheMessageThread());
 
-    if (xml == nullptr || ! file.replaceWithText (xml->toString()))
+    auto projectFile = file;
+    projectFile = projectFile.withFileExtension (juce::String (kProjectFileExtension).substring (1));
+
+    if (! projectFile.replaceWithText (createJsonString()))
         return false;
 
     markSaved();
@@ -204,8 +277,14 @@ bool ProjectState::saveToFile (const juce::File& file)
 
 bool ProjectState::loadFromFile (const juce::File& file)
 {
-    if (const auto xml = juce::parseXML (file))
-        return loadFromXml (*xml);
+    jassert (juce::MessageManager::getInstance()->isThisTheMessageThread());
+
+    if (file.getFileExtension().compareIgnoreCase (kProjectFileExtension) != 0)
+        return false;
+
+    const auto text = file.loadFileAsString();
+    if (! text.isEmpty())
+        return loadFromJsonString (text);
 
     return false;
 }

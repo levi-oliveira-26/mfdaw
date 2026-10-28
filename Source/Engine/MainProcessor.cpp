@@ -215,17 +215,22 @@ juce::AudioProcessorEditor* MainProcessor::createEditor()
 void MainProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
     // Hosts chamam isto na message thread; o ValueTree não é thread-safe.
-    if (const auto xml = projectState.createXml())
-        copyXmlToBinary (*xml, destData);
+    const auto jsonText = projectState.createJsonString();
+    const auto json = jsonText.toUTF8();
+    destData.reset();
+    destData.append (json, static_cast<size_t> (jsonText.getNumBytesAsUTF8()));
 }
 
 void MainProcessor::setStateInformation (const void* data, int sizeInBytes)
 {
-    if (const auto xml = getXmlFromBinary (data, sizeInBytes))
-    {
-        projectState.loadFromXml (*xml);
+    if (data == nullptr || sizeInBytes <= 0)
+        return;
+
+    const auto json = juce::String::fromUTF8 (static_cast<const char*> (data),
+                                               static_cast<size_t> (sizeInBytes));
+
+    if (projectState.loadFromJsonString (json))
         pushFullState(); // garante o motor em dia mesmo se nada "mudou" na árvore
-    }
 }
 
 } // namespace mf

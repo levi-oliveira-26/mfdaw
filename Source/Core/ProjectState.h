@@ -13,6 +13,7 @@ inline constexpr int kNumSteps       = 16;   // passos do sequenciador
 inline constexpr int kNumWizardSteps = 5;    // Ritmo, Harmonia, Melodia, Voz, Mix
 inline constexpr int kMinBpm         = 40;
 inline constexpr int kMaxBpm         = 240;
+inline constexpr const char* kProjectFileExtension = ".mfdaw";
 
 enum class Scale : int { Major = 0, Minor = 1 };
 
@@ -99,8 +100,11 @@ public:
     [[nodiscard]] bool isModified() const noexcept { return modified.load (std::memory_order_acquire); }
     void markSaved() noexcept                       { modified.store (false, std::memory_order_release); }
 
-    [[nodiscard]] std::unique_ptr<juce::XmlElement> createXml() const;
-    bool loadFromXml (const juce::XmlElement& xml);
+    [[nodiscard]] juce::var createJson() const;
+    [[nodiscard]] juce::String createJsonString() const;
+    bool loadFromJson (const juce::var& json);
+    bool loadFromJsonString (const juce::String& json);
+
     bool saveToFile (const juce::File& file);
     bool loadFromFile (const juce::File& file);
 
