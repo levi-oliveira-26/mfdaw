@@ -7,6 +7,7 @@
 #include "UI/MfLookAndFeel.h"
 #include "UI/PlaceholderPanel.h"
 #include "UI/StepGridComponent.h"
+#include "UI/SmartChordsComponent.h"
 
 namespace mf
 {
@@ -66,6 +67,7 @@ private:
 
     // Conteúdo
     StepGridComponent stepGrid;
+    SmartChordsComponent smartChords;
     PlaceholderPanel placeholder;
     juce::Rectangle<int> contentArea;
 

@@ -34,7 +34,8 @@ MainEditor::MainEditor (MainProcessor& processorToEdit)
       engine (processorToEdit),
       state (processorToEdit.getProjectState()),
       stepGrid (processorToEdit.getProjectState(), processorToEdit.getSampleManager(),
-                processorToEdit.getSampleRate())
+                processorToEdit.getSampleRate()),
+      smartChords (processorToEdit.getProjectState())
 {
     setLookAndFeel (&laf);
 
@@ -106,6 +107,7 @@ MainEditor::MainEditor (MainProcessor& processorToEdit)
 
     // ----- Conteúdo -----
     addChildComponent (stepGrid);
+    addChildComponent (smartChords);
     addChildComponent (placeholder);
 
     // ----- Reatividade -----
@@ -187,6 +189,7 @@ void MainEditor::resized()
     contentArea = area;
     const auto inner = contentArea.reduced (kPad);
     stepGrid.setBounds (inner);
+    smartChords.setBounds (inner);
     placeholder.setBounds (inner);
 }
 
@@ -244,15 +247,17 @@ void MainEditor::refreshFromState()
 
     // Conteúdo
     const bool showGrid = ! freeMode && step == 1;
+    const bool showSmartChords = ! freeMode && step == 2;
     stepGrid.setVisible (showGrid);
-    placeholder.setVisible (! showGrid);
+    smartChords.setVisible (showSmartChords);
+    placeholder.setVisible (! showGrid && ! showSmartChords);
 
     if (freeMode)
         placeholder.setContent (txt ("Modo Livre - Timeline"),
                                 txt ("Visualização de arranjo em pistas paralelas (Card 6.1 - em breve). "
                                      "Seu projeto continua intacto: volte ao Modo Assistente quando quiser."),
                                 col (kTextPrimary));
-    else if (! showGrid)
+    else if (! showGrid && ! showSmartChords)
         placeholder.setContent (txt (kStepTitles[step - 1]), txt (kStepDescriptions[step - 1]), stepColour (step));
 
     repaint();
