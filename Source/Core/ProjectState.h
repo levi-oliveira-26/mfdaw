@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <array>
 #include <juce_data_structures/juce_data_structures.h>
 
 namespace mf
@@ -16,6 +17,13 @@ inline constexpr int kMaxBpm         = 240;
 inline constexpr const char* kProjectFileExtension = ".mfdaw";
 
 enum class Scale : int { Major = 0, Minor = 1 };
+
+struct AudioClipModel
+{
+    juce::String filePath;
+    int startBar { 0 };
+    double durationSeconds { 0.0 };
+};
 
 /** Identificadores de propriedades / tipos da árvore de estado. */
 namespace IDs
@@ -37,6 +45,13 @@ namespace IDs
     inline const juce::Identifier notes      { "notes" };
     inline const juce::Identifier track      { "TRACK" };
     inline const juce::Identifier mask       { "mask" };         // bit n = passo n ativo
+
+    // --- Voz / clips de audio ---
+    inline const juce::Identifier voiceTracks { "VOICE_TRACKS" };
+    inline const juce::Identifier audioClip   { "AUDIO_CLIP" };
+    inline const juce::Identifier filePath    { "filePath" };
+    inline const juce::Identifier startBar    { "startBar" };
+    inline const juce::Identifier durationSeconds { "durationSeconds" };
 
     // --- Sessão transitória (NÃO salva, NÃO suja o projeto) ---
     inline const juce::Identifier session     { "SESSION" };
@@ -109,6 +124,11 @@ public:
     void toggleStep (int track, int step);
     [[nodiscard]] int  getStepVelocity (int track, int step) const;
     void               setStepVelocity (int track, int step, int velocity);
+
+    // --- Voz / Audio Clips (Card 4.1) ---
+    void addAudioClip (const AudioClipModel& clip);
+    [[nodiscard]] int getNumAudioClips() const;
+    [[nodiscard]] AudioClipModel getAudioClip (int index) const;
 
     // --- Sessão (transitória) ---
     [[nodiscard]] int  getCurrentStep() const;     // 1..5

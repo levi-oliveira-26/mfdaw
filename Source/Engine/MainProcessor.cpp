@@ -150,10 +150,17 @@ void MainProcessor::valueTreePropertyChanged (juce::ValueTree& changedTree, cons
             {
                 const auto destination = juce::File::getSpecialLocation (juce::File::tempDirectory)
                                              .getChildFile ("mfdaw-recording.wav");
+                recordingStartBar.store (getCurrentBar(), std::memory_order_relaxed);
                 audioRecorder.startRecording (destination);
             }
             else
+            {
                 audioRecorder.stopRecording();
+                if (audioRecorder.getCurrentFile().existsAsFile())
+                    projectState.addAudioClip ({ audioRecorder.getCurrentFile().getFullPathName(),
+                                                 recordingStartBar.load (std::memory_order_relaxed),
+                                                 audioRecorder.getRecordedSeconds() });
+            }
         }
     }
     else if (changedTree.hasType (IDs::track))
@@ -440,6 +447,8 @@ void MainProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBu
                 }
 
                 playheadStep.store (scheduledStep, std::memory_order_relaxed);
+                if (scheduledStep == 0 && playheadSampleIndex > 0)
+                    currentBar.fetch_add (1, std::memory_order_relaxed);
                 nextStep = (scheduledStep + 1) % kNumSteps;
                 samplesToNextStep += samplesPerStep;
             }

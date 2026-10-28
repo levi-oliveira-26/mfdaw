@@ -133,6 +133,7 @@ void ProjectState::ensureStructure()
         tree.setProperty (IDs::bpm, clampedBpm, nullptr);
 
     tree.getOrCreateChildWithName (IDs::harmony, nullptr);
+    tree.getOrCreateChildWithName (IDs::voiceTracks, nullptr);
 
     auto sequencer = tree.getOrCreateChildWithName (IDs::sequencer, nullptr);
 
@@ -234,6 +235,35 @@ void ProjectState::setHarmonyChord (int slot, const std::array<int, 3>& midiNote
         chordTree.setProperty (IDs::notes, noteList, &undoManager);
         harmony.appendChild (chordTree, &undoManager);
     }
+}
+
+void ProjectState::addAudioClip (const AudioClipModel& clip)
+{
+    if (clip.filePath.isEmpty() || clip.durationSeconds <= 0.0)
+        return;
+
+    juce::ValueTree clipTree (IDs::audioClip);
+    clipTree.setProperty (IDs::filePath, clip.filePath, &undoManager);
+    clipTree.setProperty (IDs::startBar, juce::jmax (0, clip.startBar), &undoManager);
+    clipTree.setProperty (IDs::durationSeconds, juce::jmax (0.0, clip.durationSeconds), &undoManager);
+    tree.getChildWithName (IDs::voiceTracks).appendChild (clipTree, &undoManager);
+}
+
+int ProjectState::getNumAudioClips() const
+{
+    return tree.getChildWithName (IDs::voiceTracks).getNumChildren();
+}
+
+AudioClipModel ProjectState::getAudioClip (int index) const
+{
+    const auto clips = tree.getChildWithName (IDs::voiceTracks);
+    if (index < 0 || index >= clips.getNumChildren())
+        return {};
+
+    const auto clip = clips.getChild (index);
+    return { clip.getProperty (IDs::filePath, {}).toString(),
+             static_cast<int> (clip.getProperty (IDs::startBar, 0)),
+             static_cast<double> (clip.getProperty (IDs::durationSeconds, 0.0)) };
 }
 
 juce::String ProjectState::getHarmonyNotes (int slot) const

@@ -48,6 +48,7 @@ public:
     void requestRecordingCountIn() noexcept;
     void cancelRecordingCountIn() noexcept;
     [[nodiscard]] int getRecordingCountIn() const noexcept { return recordingCountIn.load (std::memory_order_relaxed); }
+    [[nodiscard]] int getCurrentBar() const noexcept { return currentBar.load (std::memory_order_relaxed); }
     [[nodiscard]] bool consumeRecordingStart() noexcept { return recordingStartSignal.exchange (false, std::memory_order_acq_rel); }
 
     /** Passo (0..15) que acabou de ser disparado, ou -1 se parado. Thread-safe. */
@@ -135,6 +136,8 @@ private:
 
     // Canal Audio -> UI.
     std::atomic<int> playheadStep { -1 };
+    std::atomic<int> currentBar { 0 };
+    std::atomic<int> recordingStartBar { 0 };
     std::atomic<std::uint32_t> droppedEvents { 0 };
 
     // Gravacao com quatro beats de pre-roll, alinhada ao primeiro passo da

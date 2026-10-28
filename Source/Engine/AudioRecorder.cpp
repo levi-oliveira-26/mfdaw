@@ -51,6 +51,8 @@ bool AudioRecorder::startRecording (juce::File destination)
     juce::ignoreUnused (outputStream.release());
 
     currentFile = destination;
+    writtenSamples = 0;
+    recordedSeconds.store (0.0, std::memory_order_release);
     stopRequested.store (false, std::memory_order_release);
     fifo.reset();
     recording.store (true, std::memory_order_release);
@@ -68,6 +70,7 @@ void AudioRecorder::stopRecording()
 
     stopRequested.store (true, std::memory_order_release);
     ioWakeup.signal();
+    stopped.wait (5000);
 }
 
 void AudioRecorder::pushAudio (const juce::AudioBuffer<float>& buffer) noexcept
@@ -134,6 +137,7 @@ void AudioRecorder::run()
         {
             writer.reset();
             stopRequested.store (false, std::memory_order_release);
+            stopped.signal();
         }
 
         ioWakeup.wait (10);
@@ -160,5 +164,7 @@ void AudioRecorder::writePendingAudio() noexcept
 
     writer->writeFromAudioSampleBuffer (writeBuffer, 0, readable);
     fifo.finishedRead (readable);
+    writtenSamples += static_cast<std::uint64_t> (readable);
+    recordedSeconds.store (writtenSamples / juce::jmax (1.0, sampleRate), std::memory_order_relaxed);
 }
 } // namespace mf
