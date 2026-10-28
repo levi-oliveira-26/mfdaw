@@ -35,7 +35,8 @@ MainEditor::MainEditor (MainProcessor& processorToEdit)
       state (processorToEdit.getProjectState()),
       stepGrid (processorToEdit.getProjectState(), processorToEdit.getSampleManager(),
                 processorToEdit.getSampleRate()),
-      smartChords (processorToEdit.getProjectState(), processorToEdit)
+      smartChords (processorToEdit.getProjectState(), processorToEdit),
+      pianoRoll (processorToEdit.getProjectState())
 {
     setLookAndFeel (&laf);
 
@@ -108,6 +109,7 @@ MainEditor::MainEditor (MainProcessor& processorToEdit)
     // ----- Conteúdo -----
     addChildComponent (stepGrid);
     addChildComponent (smartChords);
+    addChildComponent (pianoRoll);
     addChildComponent (placeholder);
 
     // ----- Reatividade -----
@@ -190,6 +192,7 @@ void MainEditor::resized()
     const auto inner = contentArea.reduced (kPad);
     stepGrid.setBounds (inner);
     smartChords.setBounds (inner);
+    pianoRoll.setBounds (inner);
     placeholder.setBounds (inner);
 }
 
@@ -248,16 +251,18 @@ void MainEditor::refreshFromState()
     // Conteúdo
     const bool showGrid = ! freeMode && step == 1;
     const bool showSmartChords = ! freeMode && step == 2;
+    const bool showPianoRoll = ! freeMode && step == 3;
     stepGrid.setVisible (showGrid);
     smartChords.setVisible (showSmartChords);
-    placeholder.setVisible (! showGrid && ! showSmartChords);
+    pianoRoll.setVisible (showPianoRoll);
+    placeholder.setVisible (! showGrid && ! showSmartChords && ! showPianoRoll);
 
     if (freeMode)
         placeholder.setContent (txt ("Modo Livre - Timeline"),
                                 txt ("Visualização de arranjo em pistas paralelas (Card 6.1 - em breve). "
                                      "Seu projeto continua intacto: volte ao Modo Assistente quando quiser."),
                                 col (kTextPrimary));
-    else if (! showGrid && ! showSmartChords)
+    else if (! showGrid && ! showSmartChords && ! showPianoRoll)
         placeholder.setContent (txt (kStepTitles[step - 1]), txt (kStepDescriptions[step - 1]), stepColour (step));
 
     repaint();
