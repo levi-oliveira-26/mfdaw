@@ -6,14 +6,15 @@
 namespace mf
 {
 
-SmartChordsComponent::SmartChordsComponent (ProjectState& projectState)
-    : state (projectState)
+SmartChordsComponent::SmartChordsComponent (ProjectState& projectState, MainProcessor& audioProcessor)
+    : state (projectState), processor (audioProcessor)
 {
     for (auto& label : chordLabels)
     {
         label.setJustificationType (juce::Justification::centred);
         label.setColour (juce::Label::textColourId, theme::col (theme::kBgDeep));
         label.setFont (theme::makeFont (28.0f, true));
+        label.setInterceptsMouseClicks (false, false);
         addAndMakeVisible (label);
     }
 
@@ -62,6 +63,56 @@ void SmartChordsComponent::refreshChords()
 
     for (size_t i = 0; i < chordLabels.size(); ++i)
         chordLabels[i].setText (progression[i], juce::dontSendNotification);
+
+    repaint();
+}
+
+void SmartChordsComponent::mouseDown (const juce::MouseEvent& event)
+{
+    for (size_t i = 0; i < chordLabels.size(); ++i)
+    {
+        if (chordLabels[i].getBounds().contains (event.getPosition()))
+        {
+            pressedChord = static_cast<int> (i);
+            processor.requestChordPreview (pressedChord, true);
+            repaint();
+            break;
+        }
+    }
+}
+
+void SmartChordsComponent::mouseUp (const juce::MouseEvent&)
+{
+    if (pressedChord >= 0)
+    {
+        processor.requestChordPreview (pressedChord, false);
+        pressedChord = -1;
+        repaint();
+    }
+}
+
+void SmartChordsComponent::mouseDrag (const juce::MouseEvent& event)
+{
+    int chordUnderPointer = -1;
+
+    for (size_t i = 0; i < chordLabels.size(); ++i)
+    {
+        if (chordLabels[i].getBounds().contains (event.getPosition()))
+        {
+            chordUnderPointer = static_cast<int> (i);
+            break;
+        }
+    }
+
+    if (chordUnderPointer == pressedChord)
+        return;
+
+    if (pressedChord >= 0)
+        processor.requestChordPreview (pressedChord, false);
+
+    pressedChord = chordUnderPointer;
+    if (pressedChord >= 0)
+        processor.requestChordPreview (pressedChord, true);
 
     repaint();
 }

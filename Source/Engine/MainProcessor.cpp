@@ -47,6 +47,48 @@ void MainProcessor::requestStop() noexcept
     post (EngineEvent::stop());
 }
 
+void MainProcessor::requestChordPreview (int chordIndex, bool pressed) noexcept
+{
+    chordIndex = juce::jlimit (0, 3, chordIndex);
+    const int root = projectState.getKeyRoot();
+    const bool minor = projectState.getScale() == Scale::Minor;
+
+    static constexpr std::array<std::array<int, 3>, 4> majorIntervals {{
+        {{ 0, 4, 7 }}, {{ 7, 11, 14 }}, {{ 9, 12, 16 }}, {{ 5, 9, 12 }}
+    }};
+    static constexpr std::array<std::array<int, 3>, 4> minorIntervals {{
+        {{ 0, 3, 7 }}, {{ 8, 12, 15 }}, {{ 3, 7, 10 }}, {{ 10, 14, 17 }}
+    }};
+
+    const auto& intervals = minor ? minorIntervals : majorIntervals;
+    for (const int interval : intervals[static_cast<std::size_t> (chordIndex)])
+        post (EngineEvent::chordNote (48 + root + interval, pressed));
+}
+
+float MainProcessor::PreviewVoice::process (double sampleRate) noexcept
+{
+    if (note < 0)
+        return 0.0f;
+
+    constexpr float pi = 3.14159265358979323846f;
+    const float frequency = 440.0f * std::pow (2.0f, (note - 69) / 12.0f);
+    phase += frequency / static_cast<float> (sampleRate);
+    if (phase >= 1.0f)
+        phase -= 1.0f;
+
+    envelope += (velocity - envelope) * (velocity > envelope ? 0.004f : 0.002f);
+    if (velocity == 0.0f && envelope < 0.0001f)
+        note = -1;
+
+    return std::sin (phase * 2.0f * pi) * envelope * 0.10f;
+}
+
+void MainProcessor::PreviewVoice::start (int midiNote, float gain) noexcept
+{
+    note = midiNote;
+    velocity = gain;
+}
+
 void MainProcessor::post (const EngineEvent& event) noexcept
 {
     if (! uiToAudio.push (event))
@@ -192,6 +234,34 @@ void MainProcessor::drainEvents() noexcept
                 {
                     velocities[static_cast<std::size_t> (event.a)][static_cast<std::size_t> (event.b)]
                         = static_cast<std::uint8_t> (event.c);
+                }
+                break;
+
+            case EngineEvent::Type::ChordNote:
+                if (event.a >= 0 && event.a <= 127)
+                {
+                    if (event.b != 0)
+                    {
+                        for (auto& voice : previewVoices)
+                        {
+                            if (voice.note < 0 || voice.note == event.a)
+                            {
+                                voice.start (event.a, static_cast<float> (event.c) / 127.0f);
+                                break;
+                            }
+                        }
+                    }
+                    else
+                    {
+                        for (auto& voice : previewVoices)
+                        {
+                            if (voice.note == event.a)
+                            {
+                                voice.release();
+                                break;
+                            }
+                        }
+                    }
                 }
                 break;
         }
@@ -345,6 +415,9 @@ void MainProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBu
                 mix += voiceSample * velocityGains[track];
             }
         }
+
+        for (auto& previewVoice : previewVoices)
+            mix += previewVoice.process (sampleRate);
 
         mix = std::clamp (mix * kMasterGain, -1.0f, 1.0f);
 

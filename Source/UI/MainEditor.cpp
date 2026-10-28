@@ -35,7 +35,7 @@ MainEditor::MainEditor (MainProcessor& processorToEdit)
       state (processorToEdit.getProjectState()),
       stepGrid (processorToEdit.getProjectState(), processorToEdit.getSampleManager(),
                 processorToEdit.getSampleRate()),
-      smartChords (processorToEdit.getProjectState())
+      smartChords (processorToEdit.getProjectState(), processorToEdit)
 {
     setLookAndFeel (&laf);
 

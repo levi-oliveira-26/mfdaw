@@ -19,7 +19,7 @@ namespace mf
  */
 struct EngineEvent
 {
-    enum class Type : std::uint8_t { SetBpm, SetPlaying, SetTrackMask, SetStepVelocity };
+    enum class Type : std::uint8_t { SetBpm, SetPlaying, SetTrackMask, SetStepVelocity, ChordNote };
 
     Type type { Type::SetBpm };
     std::int32_t a { 0 };
@@ -37,6 +37,11 @@ struct EngineEvent
     [[nodiscard]] static EngineEvent setStepVelocity (int track, int step, int velocity) noexcept
     {
         return { Type::SetStepVelocity, track, step, velocity };
+    }
+
+    [[nodiscard]] static EngineEvent chordNote (int note, bool isOn) noexcept
+    {
+        return { Type::ChordNote, note, isOn ? 1 : 0, 100 };
     }
 };
 

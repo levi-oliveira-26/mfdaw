@@ -41,6 +41,7 @@ public:
     [[nodiscard]] SampleManager& getSampleManager() noexcept { return sampleManager; }
     [[nodiscard]] double getSampleRate() const noexcept { return sampleRate; }
     void requestStop() noexcept;
+    void requestChordPreview (int chordIndex, bool pressed) noexcept;
 
     /** Passo (0..15) que acabou de ser disparado, ou -1 se parado. Thread-safe. */
     [[nodiscard]] int getPlayheadStep() const noexcept { return playheadStep.load (std::memory_order_relaxed); }
@@ -111,6 +112,18 @@ private:
     std::array<float, kNumTracks> samplePositions {};
     std::array<SampleManager::SamplePtr, kNumTracks> activeSamples {};
     std::array<DrumVoice, kNumTracks> voices {};
+
+    struct PreviewVoice
+    {
+        int note { -1 };
+        float phase { 0.0f };
+        float envelope { 0.0f };
+        float velocity { 0.0f };
+        [[nodiscard]] float process (double sampleRate) noexcept;
+        void start (int midiNote, float gain) noexcept;
+        void release() noexcept { velocity = 0.0f; }
+    };
+    std::array<PreviewVoice, 12> previewVoices {};
 
     // Canal Audio -> UI.
     std::atomic<int> playheadStep { -1 };
