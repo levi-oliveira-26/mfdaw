@@ -39,12 +39,23 @@ MainEditor::MainEditor (MainProcessor& processorToEdit)
     setLookAndFeel (&laf);
 
     // ----- Transporte -----
+    addKeyListener (this);
+
     brandLabel.setText ("M.F. DAW", juce::dontSendNotification);
     brandLabel.setFont (makeFont (22.0f, true));
     addAndMakeVisible (brandLabel);
 
-    playButton.onClick = [this] { state.setPlaying (! state.isPlaying()); };
+    playButton.setButtonText (txt ("Play"));
+    playButton.onClick = [this] { state.setPlaying (true); };
     addAndMakeVisible (playButton);
+
+    pauseButton.setButtonText (txt ("Pause"));
+    pauseButton.onClick = [this] { state.setPlaying (false); };
+    addAndMakeVisible (pauseButton);
+
+    stopButton.setButtonText (txt ("Stop"));
+    stopButton.onClick = [this] { state.setPlaying (false); };
+    addAndMakeVisible (stopButton);
 
     bpmSlider.setSliderStyle (juce::Slider::IncDecButtons);
     bpmSlider.setRange (kMinBpm, kMaxBpm, 1.0);
@@ -106,6 +117,7 @@ MainEditor::MainEditor (MainProcessor& processorToEdit)
 
 MainEditor::~MainEditor()
 {
+    removeKeyListener (this);
     stopTimer();
     state.getTree().removeListener (this);
     state.getSession().removeListener (this);
@@ -134,7 +146,11 @@ void MainEditor::resized()
     auto transport = area.removeFromTop (kRowH);
     brandLabel.setBounds (transport.removeFromLeft (128));
     transport.removeFromLeft (kPad);
-    playButton.setBounds (transport.removeFromLeft (112));
+    playButton.setBounds (transport.removeFromLeft (72));
+    transport.removeFromLeft (kPad / 2);
+    pauseButton.setBounds (transport.removeFromLeft (72));
+    transport.removeFromLeft (kPad / 2);
+    stopButton.setBounds (transport.removeFromLeft (72));
     transport.removeFromLeft (kPad);
     bpmSlider.setBounds (transport.removeFromLeft (232));
     transport.removeFromLeft (kPad);
@@ -183,6 +199,15 @@ void MainEditor::timerCallback()
     stepGrid.setPlayheadStep (engine.getPlayheadStep());
 }
 
+bool MainEditor::keyPressed (const juce::KeyPress& key, juce::Component*)
+{
+    if (! key.isKeyCode (juce::KeyPress::spaceKey))
+        return false;
+
+    state.setPlaying (! state.isPlaying());
+    return true;
+}
+
 void MainEditor::refreshFromState()
 {
     const int  step     = state.getCurrentStep();
@@ -190,9 +215,10 @@ void MainEditor::refreshFromState()
     const bool playing  = state.isPlaying();
 
     // Transporte
-    playButton.setButtonText (txt (playing ? "Parar" : "Tocar"));
     playButton.setToggleState (playing, juce::dontSendNotification);
     playButton.setColour (juce::TextButton::buttonOnColourId, col (kActionRecord));
+    pauseButton.setEnabled (playing);
+    stopButton.setEnabled (playing);
 
     bpmSlider.setValue (state.getBpm(), juce::dontSendNotification);
 
