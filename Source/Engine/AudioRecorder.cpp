@@ -66,11 +66,17 @@ bool AudioRecorder::startRecording (juce::File destination)
 void AudioRecorder::stopRecording()
 {
     if (! recording.exchange (false, std::memory_order_acq_rel))
+    {
+        if (isThreadRunning())
+            stopThread (5000);
         return;
+    }
 
+    stopped.reset();
     stopRequested.store (true, std::memory_order_release);
     ioWakeup.signal();
     stopped.wait (5000);
+    stopThread (5000);
 }
 
 void AudioRecorder::pushAudio (const juce::AudioBuffer<float>& buffer) noexcept

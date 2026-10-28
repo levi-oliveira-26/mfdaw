@@ -13,7 +13,8 @@ namespace mf
 MainProcessor::MainProcessor()
     : juce::AudioProcessor (BusesProperties()
                             .withInput ("Input", juce::AudioChannelSet::stereo(), true)
-                            .withOutput ("Output", juce::AudioChannelSet::stereo(), true))
+                            .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
+      audioRecorder (std::make_unique<AudioRecorder>())
 {
     voices[0].setKind (DrumVoice::Kind::Kick);
     voices[1].setKind (DrumVoice::Kind::Snare);
@@ -27,7 +28,7 @@ MainProcessor::MainProcessor()
         trackVelocities.fill (100);
 
     recomputeTiming();
-    audioRecorder.prepare (sampleRate, 0);
+    audioRecorder->prepare (sampleRate, 0);
 
     projectState.getTree().addListener (this);
     projectState.getSession().addListener (this);
@@ -151,15 +152,15 @@ void MainProcessor::valueTreePropertyChanged (juce::ValueTree& changedTree, cons
                 const auto destination = juce::File::getSpecialLocation (juce::File::tempDirectory)
                                              .getChildFile ("mfdaw-recording.wav");
                 recordingStartBar.store (getCurrentBar(), std::memory_order_relaxed);
-                audioRecorder.startRecording (destination);
+                audioRecorder->startRecording (destination);
             }
             else
             {
-                audioRecorder.stopRecording();
-                if (audioRecorder.getCurrentFile().existsAsFile())
-                    projectState.addAudioClip ({ audioRecorder.getCurrentFile().getFullPathName(),
+                audioRecorder->stopRecording();
+                if (audioRecorder->getCurrentFile().existsAsFile())
+                    projectState.addAudioClip ({ audioRecorder->getCurrentFile().getFullPathName(),
                                                  recordingStartBar.load (std::memory_order_relaxed),
-                                                 audioRecorder.getRecordedSeconds() });
+                                                 audioRecorder->getRecordedSeconds() });
             }
         }
     }
@@ -203,7 +204,7 @@ void MainProcessor::valueTreeRedirected (juce::ValueTree&)
 void MainProcessor::prepareToPlay (double newSampleRate, int /*samplesPerBlock*/)
 {
     sampleRate = newSampleRate > 0.0 ? newSampleRate : 44100.0;
-    audioRecorder.prepare (sampleRate, 0);
+    audioRecorder->prepare (sampleRate, 0);
 
     for (auto& voice : voices)
         voice.prepare (sampleRate);
@@ -368,8 +369,8 @@ void MainProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBu
         recordingCountIn.store (4, std::memory_order_relaxed);
     }
 
-    if (audioRecorder.isRecording())
-        audioRecorder.pushAudio (buffer);
+    if (audioRecorder->isRecording())
+        audioRecorder->pushAudio (buffer);
     buffer.clear();
 
     const int numSamples  = buffer.getNumSamples();

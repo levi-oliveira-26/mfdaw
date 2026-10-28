@@ -3,6 +3,7 @@
 #include <array>
 #include <atomic>
 #include <cstdint>
+#include <memory>
 #include <juce_audio_processors/juce_audio_processors.h>
 
 #include "Core/ProjectState.h"
@@ -40,7 +41,7 @@ public:
     // --- Acesso para a UI (message thread) ---
     [[nodiscard]] ProjectState& getProjectState() noexcept { return projectState; }
     [[nodiscard]] SampleManager& getSampleManager() noexcept { return sampleManager; }
-    [[nodiscard]] AudioRecorder& getAudioRecorder() noexcept { return audioRecorder; }
+    [[nodiscard]] AudioRecorder& getAudioRecorder() noexcept { return *audioRecorder; }
     [[nodiscard]] double getSampleRate() const noexcept { return sampleRate; }
     void requestStop() noexcept;
     void requestChordPreview (int chordIndex, bool pressed) noexcept;
@@ -102,7 +103,7 @@ private:
 
     ProjectState projectState;
     SampleManager sampleManager;
-    AudioRecorder audioRecorder;
+    std::unique_ptr<AudioRecorder> audioRecorder;
     SpscQueue<EngineEvent, 1024> uiToAudio;
 
     // Estado exclusivo da audio thread (cópias locais; nunca acessadas pela UI).
