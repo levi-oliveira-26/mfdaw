@@ -72,6 +72,7 @@ target_compile_options(MFDaw PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
 add_executable(MFDawTests
     Source/Tests/RunStepSequencerTests.cpp
     Source/Tests/StepSequencerTests.cpp
+    Source/Tests/HarmonyTests.cpp
     Source/Core/ChordGenerator.cpp
     Source/Core/ProjectState.cpp
     Source/Engine/MainProcessor.cpp
