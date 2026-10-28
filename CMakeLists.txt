@@ -52,6 +52,7 @@ juce_add_plugin(MFDaw
 
 target_sources(MFDaw PRIVATE
     Source/Core/ChordGenerator.cpp
+    Source/Core/ScaleLock.cpp
     Source/Core/ProjectState.cpp
     Source/Engine/MainProcessor.cpp
     Source/UI/StepGridComponent.cpp
@@ -73,7 +74,9 @@ add_executable(MFDawTests
     Source/Tests/RunStepSequencerTests.cpp
     Source/Tests/StepSequencerTests.cpp
     Source/Tests/HarmonyTests.cpp
+    Source/Tests/ScaleLockTests.cpp
     Source/Core/ChordGenerator.cpp
+    Source/Core/ScaleLock.cpp
     Source/Core/ProjectState.cpp
     Source/Engine/MainProcessor.cpp
     Source/UI/StepGridComponent.cpp
