@@ -14,8 +14,7 @@ StepGridComponent::StepGridComponent (ProjectState& stateToUse, SampleManager& s
     swingSlider.setRange (0.0, 100.0, 1.0);
     swingSlider.setValue (state.getSwingAmount() * 100.0,
                           juce::dontSendNotification);
-    swingSlider.setTextValueSuffix ("%");
-    swingSlider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 64, 20);
+    swingSlider.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
     swingSlider.addListener (this);
     addAndMakeVisible (swingSlider);
 

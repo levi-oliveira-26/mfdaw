@@ -317,7 +317,7 @@ void MainProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBu
                     sample *= juce::jmin (startFade, endFade);
 
                     mix += sample * velocityGains[track];
-                    juce::ignoreUnused (voices[track].process()); // drena envelopes sintéticas durante custom sample playback
+                    [[maybe_unused]] const float voiceEnvelope = voices[track].process(); // drena envelopes sintéticas durante custom sample playback
                     samplePositions[track] += 1.0f;
                 }
                 else

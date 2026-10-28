@@ -64,7 +64,7 @@ public:
 
         beginTest ("Swing E2E delays the offbeat MIDI event at 120 BPM");
         const auto offsets = measureSwingMidiOffsets (44100.0, 0.5f);
-        expectEquals (static_cast<std::size_t> (offsets.size()), static_cast<std::size_t> (2));
+        expectEquals (static_cast<std::size_t> (offsets.size()), static_cast<std::size_t> (2u));
 
         if (offsets.size() == 2u)
         {
