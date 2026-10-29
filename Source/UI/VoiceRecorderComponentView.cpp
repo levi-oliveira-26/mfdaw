@@ -53,7 +53,7 @@ void VoiceRecorderComponentView::paint (juce::Graphics& g)
     g.fillAll (col (kSurfaceBase));
     g.setColour (col (kTextPrimary));
     g.setFont (makeFont (20.0f, true));
-    g.drawText ("Passo 4 - Voz", getLocalBounds().removeFromTop (44), juce::Justification::centredLeft, false);
+    g.drawText (txt ("Gravação de voz"), getLocalBounds().removeFromTop (44), juce::Justification::centredLeft, false);
 
     g.setColour (col (kBorderSubtle));
     g.drawRoundedRectangle (vuArea.toFloat(), 6.0f, 1.0f);
@@ -126,7 +126,7 @@ void VoiceRecorderComponentView::timerCallback()
     recordButton.setToggleState (state.isRecording(), juce::dontSendNotification);
 
     if (state.isRecording())
-        recordButton.setButtonText ("Parar gravação");
+        recordButton.setButtonText (theme::txt ("Parar gravação"));
     else
     {
         const int countIn = engine.getRecordingCountIn();

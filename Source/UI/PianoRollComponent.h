@@ -10,6 +10,14 @@
 
 namespace mf
 {
+/**
+ * Piano Roll guiado com Scale Lock e rolagem vertical de várias oitavas.
+ *
+ * Cobre C1..B7 (MIDI 24..107). As linhas fora do tom do projeto continuam
+ * existindo, mas ficam escurecidas e rejeitam cliques (ScaleLock::isNoteInScale).
+ * Rolagem: roda do mouse / trackpad. O rótulo de cada linha liberada é o nome
+ * da nota com oitava ("C4"), não o número MIDI.
+ */
 class PianoRollComponent final : public juce::Component,
                                  private juce::ValueTree::Listener
 {
@@ -22,20 +30,33 @@ public:
     void mouseDown (const juce::MouseEvent& event) override;
     void mouseDrag (const juce::MouseEvent& event) override;
     void mouseUp (const juce::MouseEvent& event) override;
+    void mouseWheelMove (const juce::MouseEvent& event, const juce::MouseWheelDetails& wheel) override;
+
+    /** Nome da nota com oitava; MIDI 60 = "C4". */
+    [[nodiscard]] static juce::String noteName (int midiNote);
 
 private:
-    static constexpr int numRows = 12;
+    static constexpr int kLowestNote  = 24;    // C1
+    static constexpr int kHighestNote = 107;   // B7
+    static constexpr int numRows  = kHighestNote - kLowestNote + 1;
     static constexpr int numSteps = 16;
+    static constexpr int kRowHeight = 24;
 
+    /** Nota MIDI sob o ponto (ou -1 se fora da grade/da escala). `row`/`step` são -1 fora da grade. */
     [[nodiscard]] int noteAt (const juce::Point<int>& position, int* row = nullptr, int* step = nullptr) const;
     int toggleNote (const juce::Point<int>& position);
+    void clampScroll();
+    void scrollToNote (int midiNote);
+
     void valueTreePropertyChanged (juce::ValueTree&, const juce::Identifier&) override;
     void valueTreeChildAdded (juce::ValueTree&, juce::ValueTree&) override;
     void valueTreeChildRemoved (juce::ValueTree&, juce::ValueTree&, int) override;
 
     ProjectState& state;
     MainProcessor& processor;
-    std::array<std::array<bool, numSteps>, numRows> notes {};
+    std::array<std::array<bool, numSteps>, numRows> notes {};   // linha 0 = nota mais aguda
+    float scrollY { 0.0f };                                       // deslocamento vertical em pixels
+    bool initialScrollDone { false };
     int previewNote { -1 };
     int previewRow { -1 };
     int previewStep { -1 };

@@ -1,29 +1,33 @@
 #pragma once
 
-#include <array>
 #include <juce_audio_processors/juce_audio_processors.h>
 
+#include "Core/TrackType.h"
 #include "Engine/MainProcessor.h"
 #include "UI/MfLookAndFeel.h"
-#include "UI/PlaceholderPanel.h"
-#include "UI/StepGridComponent.h"
-#include "UI/SmartChordsComponent.h"
 #include "UI/PianoRollComponent.h"
+#include "UI/PlaceholderPanel.h"
+#include "UI/PlaylistComponent.h"
+#include "UI/SmartChordsComponent.h"
+#include "UI/StepGridComponent.h"
 #include "UI/VoiceRecorderComponentView.h"
 
 namespace mf
 {
 /**
- * MainEditor — Janela principal da M.F. DAW.
+ * MainEditor — Janela principal da M.F. DAW (Pivot: Arrangement View).
  *
- *   [ Transporte: Play | Pause | Stop | BPM | Tom | Modo Livre/Assistente ]
- *   [ Navegação do Wizard:  1 Ritmo  2 Harmonia  3 Melodia  4 Voz  5 Mixagem ]
- *   [ Área de conteúdo do passo atual (ou Timeline no Modo Livre)           ]
- *   [ Voltar                                                       Avançar ]
+ *   [ Transporte: M.F. DAW | Play | Pause | Stop | BPM | Tom             ]
+ *   [ PlaylistComponent — projeto VAZIO; faixas empilhadas verticalmente  ]
+ *   [ Gaveta do editor da faixa (só aparece ao acionar o botão de ação)   ]
  *
- * Máquina de estados basal: o passo atual (1..5) e o modo (Wizard/Livre) vivem
- * em ProjectState::session. A UI é 100% reativa: todo controle apenas grava no
- * ProjectState; refreshFromState() relê o estado e atualiza os widgets.
+ * Substitui o antigo Wizard de abas estáticas. Os editores existentes (grade
+ * de passos, Smart Chords, Piano Roll, gravador) são reaproveitados como
+ * "gaveta" aberta pelo botão de ação de cada faixa. A UI é reativa: todo
+ * controle só grava no ProjectState; nada fala com a audio thread.
+ *
+ * No Standalone a janela hospedeira (JUCE) é colocada em tela cheia na
+ * primeira exibição; como plugin (VST3) o host controla a janela.
  */
 class MainEditor final : public juce::AudioProcessorEditor,
                          private juce::ValueTree::Listener,
@@ -36,6 +40,7 @@ public:
 
     void paint (juce::Graphics&) override;
     void resized() override;
+    void parentHierarchyChanged() override;
 
 private:
     void valueTreePropertyChanged (juce::ValueTree&, const juce::Identifier&) override;
@@ -45,8 +50,13 @@ private:
     void timerCallback() override;
     bool keyPressed (const juce::KeyPress&, juce::Component*) override;
 
-    /** Relê o ProjectState e atualiza todos os widgets (sem disparar callbacks). */
+    /** Relê o ProjectState e atualiza o transporte (sem disparar callbacks). */
     void refreshFromState();
+
+    // --- Gaveta do editor da faixa ---
+    void handleTrackAction (TrackAction action, int trackId);
+    void closeDetailPanel();
+    void updateDetailPanel();
 
     // A ordem importa: o LookAndFeel é destruído por último.
     MfLookAndFeel laf;
@@ -60,20 +70,24 @@ private:
     juce::TextButton stopButton;
     juce::Slider bpmSlider;
     juce::ComboBox keyBox;
-    juce::TextButton modeButton;
 
-    // Navegação do Wizard
-    std::array<juce::TextButton, kNumWizardSteps> stepButtons;
-    juce::TextButton backButton;
-    juce::TextButton nextButton;
+    // Playlist (Arrangement View)
+    PlaylistComponent playlist;
 
-    // Conteúdo
+    // Gaveta: editores reaproveitados
+    juce::TextButton closeDetailButton;
     StepGridComponent stepGrid;
     SmartChordsComponent smartChords;
     PianoRollComponent pianoRoll;
     VoiceRecorderComponentView voiceRecorder;
     PlaceholderPanel placeholder;
-    juce::Rectangle<int> contentArea;
+
+    juce::Rectangle<int> detailArea;
+    bool detailOpen { false };
+    int detailTrackId { -1 };
+    TrackAction detailAction { TrackAction::OpenStepSequencer };
+
+    bool fullScreenRequested { false };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainEditor)
 };

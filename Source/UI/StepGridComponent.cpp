@@ -43,7 +43,9 @@ StepGridComponent::~StepGridComponent()
 
 void StepGridComponent::resized()
 {
-    swingSlider.setBounds (getWidth() - 88, 4, 76, 44);
+    // Knob (44x44, alvo de toque mínimo) encostado à direita; o rótulo "Swing"
+    // é desenhado À ESQUERDA dele (ver paint), nunca por cima.
+    swingSlider.setBounds (getWidth() - kSwingKnobSize - 12, 4, kSwingKnobSize, kSwingKnobSize);
 
     const auto grid = getGridBounds();
     const float rowHeight = grid.getHeight() / static_cast<float> (kNumTracks);
@@ -123,8 +125,10 @@ void StepGridComponent::paint (juce::Graphics& g)
     g.fillAll (col (kSurfaceBase));
     g.setColour (col (kTextPrimary));
     g.setFont (makeFont (13.0f, true));
-    g.drawText ("Swing", juce::Rectangle<float> (getWidth() - 88.0f, 0.0f, 76.0f, 16.0f),
-                juce::Justification::centred);
+    g.drawText ("Swing",
+                juce::Rectangle<float> (static_cast<float> (getWidth() - kSwingKnobSize - 12 - 8 - 64),
+                                        4.0f, 64.0f, static_cast<float> (kSwingKnobSize)),
+                juce::Justification::centredRight);
     g.setColour (gridBackground);
     g.fillRect (grid);
 

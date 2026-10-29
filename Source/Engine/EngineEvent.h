@@ -16,10 +16,15 @@ namespace mf
  *   SetPlaying   : a = 1 (play), 0 (pause), 2 (stop)
  *   SetTrackMask  : a = pista, b = máscara de 16 bits dos passos
  *   SetStepVelocity: a = pista, b = passo, c = velocity MIDI (0..127)
+ *   SetTrackType  : a = slot da Playlist, b = TrackType (0..4) ou -1 (slot vazio)
+ *   SetTrackGain  : a = slot da Playlist, b = ganho pré-mix em "por mil" (0..2000)
+ *
+ * "Slot" é o índice da faixa na Playlist (0..kMaxPlaylistTracks-1).
  */
 struct EngineEvent
 {
-    enum class Type : std::uint8_t { SetBpm, SetPlaying, SetTrackMask, SetStepVelocity, ChordNote };
+    enum class Type : std::uint8_t { SetBpm, SetPlaying, SetTrackMask, SetStepVelocity, ChordNote,
+                                     SetTrackType, SetTrackGain };
 
     Type type { Type::SetBpm };
     std::int32_t a { 0 };
@@ -42,6 +47,16 @@ struct EngineEvent
     [[nodiscard]] static EngineEvent chordNote (int note, bool isOn) noexcept
     {
         return { Type::ChordNote, note, isOn ? 1 : 0, 100 };
+    }
+
+    [[nodiscard]] static EngineEvent setTrackType (int slot, int trackType) noexcept
+    {
+        return { Type::SetTrackType, slot, trackType, 0 };
+    }
+
+    [[nodiscard]] static EngineEvent setTrackGain (int slot, int gainPermille) noexcept
+    {
+        return { Type::SetTrackGain, slot, gainPermille, 0 };
     }
 };
 

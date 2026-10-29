@@ -1,5 +1,7 @@
 #include "Core/ProjectState.h"
 
+#include "Core/FaderScale.h"
+
 namespace mf
 {
 namespace
@@ -86,9 +88,8 @@ ProjectState::ProjectState()
     // Padrões inteligentes (Card 0.1): 120 BPM, C Maior, 44.1 kHz, 24 bits.
     ensureStructure();
 
-    // Presente inicial: bumbo "four on the floor" (passos 1, 5, 9, 13) para que
-    // o primeiro "Tocar" já produza som.
-    tree.getChildWithName (IDs::sequencer).getChild (0).setProperty (IDs::mask, 0x1111, nullptr);
+    // PIVOT: o projeto nasce VAZIO. Nenhum padrão rítmico pré-carregado e a
+    // Playlist começa com 0 faixas; o usuário monta o fluxo adicionando faixas.
 
     session.setProperty (IDs::currentStep, 1, nullptr);
     session.setProperty (IDs::freeMode, false, nullptr);
@@ -134,6 +135,7 @@ void ProjectState::ensureStructure()
 
     tree.getOrCreateChildWithName (IDs::harmony, nullptr);
     tree.getOrCreateChildWithName (IDs::voiceTracks, nullptr);
+    sanitizePlaylist();
 
     auto sequencer = tree.getOrCreateChildWithName (IDs::sequencer, nullptr);
 
@@ -157,6 +159,138 @@ void ProjectState::ensureStructure()
                 trackTree.setProperty (velocityProperty (step), 100, nullptr);
         }
     }
+}
+
+void ProjectState::sanitizePlaylist()
+{
+    auto playlist = tree.getOrCreateChildWithName (IDs::playlist, nullptr);
+
+    // 1) Descarta nós inválidos (arquivo editado à mão) e os que excedem o limite.
+    for (int i = playlist.getNumChildren(); --i >= 0;)
+    {
+        const auto child = playlist.getChild (i);
+        const bool valid = i < kMaxPlaylistTracks
+                        && child.hasType (IDs::playlistTrack)
+                        && isValidTrackType (static_cast<int> (child.getProperty (IDs::trackType, -1)));
+
+        if (! valid)
+            playlist.removeChild (i, nullptr);
+    }
+
+    // 2) Ids únicos e positivos; contador monotônico acima de todos eles.
+    int highestId = static_cast<int> (playlist.getProperty (IDs::nextTrackId, 1)) - 1;
+    for (int i = 0; i < playlist.getNumChildren(); ++i)
+        highestId = juce::jmax (highestId, static_cast<int> (playlist.getChild (i).getProperty (IDs::trackId, 0)));
+
+    juce::Array<int> usedIds;
+    for (int i = 0; i < playlist.getNumChildren(); ++i)
+    {
+        auto child = playlist.getChild (i);
+        int id = static_cast<int> (child.getProperty (IDs::trackId, 0));
+
+        if (id <= 0 || usedIds.contains (id))
+        {
+            id = ++highestId;
+            child.setProperty (IDs::trackId, id, nullptr);
+        }
+
+        usedIds.add (id);
+
+        if (! child.hasProperty (IDs::gain))
+            child.setProperty (IDs::gain, static_cast<double> (fader::kDefaultPosition), nullptr);
+
+        if (! child.hasProperty (IDs::name))
+        {
+            if (const auto model = TrackModel::create (child, nullptr))
+                child.setProperty (IDs::name, model->getBaseName(), nullptr);
+        }
+    }
+
+    if (static_cast<int> (playlist.getProperty (IDs::nextTrackId, 0)) != highestId + 1)
+        playlist.setProperty (IDs::nextTrackId, highestId + 1, nullptr);
+}
+
+int ProjectState::allocateTrackId()
+{
+    auto playlist = tree.getChildWithName (IDs::playlist);
+    int next = static_cast<int> (playlist.getProperty (IDs::nextTrackId, 1));
+
+    for (int i = 0; i < playlist.getNumChildren(); ++i)
+        next = juce::jmax (next, static_cast<int> (playlist.getChild (i).getProperty (IDs::trackId, 0)) + 1);
+
+    playlist.setProperty (IDs::nextTrackId, next + 1, nullptr);
+    return next;
+}
+
+// ---------------------------------------------------------------------------
+// Playlist / Arrangement View (Pivot)
+// ---------------------------------------------------------------------------
+int ProjectState::addTrack (TrackType type)
+{
+    if (! isValidTrackType (static_cast<int> (type)))
+        return -1;
+
+    auto playlist = tree.getChildWithName (IDs::playlist);
+    if (! playlist.isValid() || playlist.getNumChildren() >= kMaxPlaylistTracks)
+        return -1;
+
+    int sameTypeCount = 0;
+    for (int i = 0; i < playlist.getNumChildren(); ++i)
+        if (static_cast<int> (playlist.getChild (i).getProperty (IDs::trackType, -1)) == static_cast<int> (type))
+            ++sameTypeCount;
+
+    // Nome padrão vem da própria subclasse ("Bateria 1", "Bateria 2", ...).
+    const auto probe = TrackModel::create (TrackModel::createNode (type, 0, {}), nullptr);
+    if (probe == nullptr)
+        return -1;
+
+    const int id = allocateTrackId();
+    const auto name = probe->getBaseName() + " " + juce::String (sameTypeCount + 1);
+
+    // O nó já nasce completo (id, tipo, nome, fader) antes de entrar na árvore:
+    // quem escuta valueTreeChildAdded enxerga um estado consistente.
+    playlist.appendChild (TrackModel::createNode (type, id, name), &undoManager);
+    return id;
+}
+
+bool ProjectState::removeTrack (int trackId)
+{
+    const int index = indexOfTrack (trackId);
+    if (index < 0)
+        return false;
+
+    tree.getChildWithName (IDs::playlist).removeChild (index, &undoManager);
+    return true;
+}
+
+int ProjectState::getNumTracks() const
+{
+    return tree.getChildWithName (IDs::playlist).getNumChildren();
+}
+
+int ProjectState::indexOfTrack (int trackId) const
+{
+    const auto playlist = tree.getChildWithName (IDs::playlist);
+
+    for (int i = 0; i < playlist.getNumChildren(); ++i)
+        if (static_cast<int> (playlist.getChild (i).getProperty (IDs::trackId, -1)) == trackId)
+            return i;
+
+    return -1;
+}
+
+std::unique_ptr<TrackModel> ProjectState::getTrackByIndex (int index)
+{
+    const auto playlist = tree.getChildWithName (IDs::playlist);
+    if (index < 0 || index >= playlist.getNumChildren())
+        return nullptr;
+
+    return TrackModel::create (playlist.getChild (index), &undoManager);
+}
+
+std::unique_ptr<TrackModel> ProjectState::getTrackById (int trackId)
+{
+    return getTrackByIndex (indexOfTrack (trackId));
 }
 
 // ---------------------------------------------------------------------------

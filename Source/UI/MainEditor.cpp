@@ -1,28 +1,12 @@
 #include "UI/MainEditor.h"
 
+#include "UI/TrackPresentation.h"
+
 namespace mf
 {
 namespace
 {
 using namespace theme;
-
-constexpr const char* kStepButtonTexts[kNumWizardSteps] = {
-    "1  Ritmo", "2  Harmonia", "3  Melodia", "4  Voz", "5  Mixagem"
-};
-
-constexpr const char* kStepTitles[kNumWizardSteps] = {
-    "Passo 1 - Ritmo", "Passo 2 - Harmonia", "Passo 3 - Melodia", "Passo 4 - Voz", "Passo 5 - Mixagem Básica"
-};
-
-constexpr const char* kStepDescriptions[kNumWizardSteps] = {
-    "",
-    "Escolha o tom e o estilo e o Smart Chords gera a progressão de acordes, com pré-escuta ao clicar "
-    "em cada bloco. (Card 2.1 - em breve)",
-    "Piano Roll guiado com Scale Lock: só as notas do tom escolhido no Passo 2 ficam disponíveis. "
-    "(Card 3.1 - em breve)",
-    "Grave sua voz com um clique e veja a forma de onda na tela. (Card 4.1 - em breve)",
-    "Console com 4 faders + Master e os knobs Espaço (reverb) e Brilho (EQ 3 bandas). (Card 5.1 - em breve)"
-};
 
 constexpr const char* kNoteNames[12] = { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" };
 
@@ -33,6 +17,7 @@ MainEditor::MainEditor (MainProcessor& processorToEdit)
     : juce::AudioProcessorEditor (processorToEdit),
       engine (processorToEdit),
       state (processorToEdit.getProjectState()),
+      playlist (processorToEdit.getProjectState()),
       stepGrid (processorToEdit.getProjectState(), processorToEdit.getSampleManager(),
                 processorToEdit.getSampleRate()),
       smartChords (processorToEdit.getProjectState(), processorToEdit),
@@ -85,29 +70,15 @@ MainEditor::MainEditor (MainProcessor& processorToEdit)
     };
     addAndMakeVisible (keyBox);
 
-    modeButton.onClick = [this] { state.setFreeMode (! state.isFreeMode()); };
-    addAndMakeVisible (modeButton);
+    // ----- Playlist (única área de conteúdo ao iniciar) -----
+    playlist.onTrackAction = [this] (TrackAction action, int trackId) { handleTrackAction (action, trackId); };
+    addAndMakeVisible (playlist);
 
-    // ----- Navegação do Wizard -----
-    for (int i = 0; i < kNumWizardSteps; ++i)
-    {
-        auto& button = stepButtons[static_cast<std::size_t> (i)];
-        button.setButtonText (txt (kStepButtonTexts[i]));
-        button.setColour (juce::TextButton::buttonOnColourId, stepColour (i + 1));
-        button.setColour (juce::TextButton::textColourOffId, col (kTextMuted));
-        button.onClick = [this, i] { state.setCurrentStep (i + 1); };
-        addAndMakeVisible (button);
-    }
+    // ----- Gaveta do editor da faixa (oculta até o usuário acionar uma faixa) -----
+    closeDetailButton.setButtonText (txt ("Fechar editor"));
+    closeDetailButton.onClick = [this] { closeDetailPanel(); };
+    addChildComponent (closeDetailButton);
 
-    backButton.setButtonText (txt ("Voltar"));
-    backButton.onClick = [this] { state.setCurrentStep (state.getCurrentStep() - 1); };
-    addAndMakeVisible (backButton);
-
-    nextButton.setButtonText (txt ("Avançar"));
-    nextButton.onClick = [this] { state.setCurrentStep (state.getCurrentStep() + 1); };
-    addAndMakeVisible (nextButton);
-
-    // ----- Conteúdo -----
     addChildComponent (stepGrid);
     addChildComponent (smartChords);
     addChildComponent (pianoRoll);
@@ -121,8 +92,8 @@ MainEditor::MainEditor (MainProcessor& processorToEdit)
     startTimerHz (30); // atualiza o playhead (lido de um std::atomic<int>)
 
     setResizable (true, true);
-    setResizeLimits (800, 520, 1600, 1000);
-    setSize (960, 600);
+    setResizeLimits (960, 640, 4096, 2304);
+    setSize (1280, 800);
 }
 
 MainEditor::~MainEditor()
@@ -135,17 +106,50 @@ MainEditor::~MainEditor()
 }
 
 // ===========================================================================
+// Janela hospedeira: tela cheia no Standalone
+// ===========================================================================
+void MainEditor::parentHierarchyChanged()
+{
+    if (fullScreenRequested)
+        return;
+
+    // No Standalone o pai é a janela do JUCE (DocumentWindow). Como VST3 o pai é
+    // a janela do host e nada acontece: quem manda no tamanho é o host.
+    if (auto* window = findParentComponentOfClass<juce::DocumentWindow>())
+    {
+        fullScreenRequested = true;
+
+        juce::Component::SafePointer<juce::DocumentWindow> safeWindow (window);
+        juce::MessageManager::callAsync ([safeWindow]
+        {
+            if (safeWindow != nullptr)
+                safeWindow->setFullScreen (true);
+        });
+    }
+}
+
+// ===========================================================================
 // Layout e pintura
 // ===========================================================================
 void MainEditor::paint (juce::Graphics& g)
 {
     g.fillAll (col (kBgDeep));
 
-    g.setColour (col (kSurfaceBase));
-    g.fillRoundedRectangle (contentArea.toFloat(), 8.0f);
+    if (! detailOpen)
+        return;
 
+    g.setColour (col (kSurfaceBase));
+    g.fillRoundedRectangle (detailArea.toFloat(), 8.0f);
     g.setColour (col (kBorderSubtle));
-    g.drawRoundedRectangle (contentArea.toFloat().reduced (0.5f), 8.0f, 1.0f);
+    g.drawRoundedRectangle (detailArea.toFloat().reduced (0.5f), 8.0f, 1.0f);
+
+    if (const auto track = state.getTrackById (detailTrackId))
+    {
+        g.setColour (presentation::colourFor (track->getType()));
+        g.setFont (makeFont (18.0f, true));
+        g.drawText (track->getName(), detailArea.reduced (kPad).removeFromTop (kRowH).withTrimmedRight (152),
+                    juce::Justification::centredLeft, true);
+    }
 }
 
 void MainEditor::resized()
@@ -165,38 +169,79 @@ void MainEditor::resized()
     bpmSlider.setBounds (transport.removeFromLeft (232));
     transport.removeFromLeft (kPad);
     keyBox.setBounds (transport.removeFromLeft (152));
-    modeButton.setBounds (transport.removeFromRight (176));
 
     area.removeFromTop (kPad);
 
-    // --- Navegação dos 5 passos ---
-    auto nav = area.removeFromTop (kRowH);
-    const int gap = kGrid;
-    const int buttonW = (nav.getWidth() - gap * (kNumWizardSteps - 1)) / kNumWizardSteps;
-
-    for (auto& button : stepButtons)
+    // --- Gaveta (embaixo) + Playlist (resto) ---
+    if (detailOpen)
     {
-        button.setBounds (nav.removeFromLeft (buttonW));
-        nav.removeFromLeft (gap);
+        const int detailHeight = juce::jmin (area.getHeight() / 2, juce::jmax (320, area.getHeight() * 55 / 100));
+        detailArea = area.removeFromBottom (detailHeight);
+        area.removeFromBottom (kPad);
+
+        auto inner = detailArea.reduced (kPad);
+        auto header = inner.removeFromTop (kRowH);
+        closeDetailButton.setBounds (header.removeFromRight (144));
+        inner.removeFromTop (kGrid);
+
+        stepGrid.setBounds (inner);
+        smartChords.setBounds (inner);
+        pianoRoll.setBounds (inner);
+        voiceRecorder.setBounds (inner);
+        placeholder.setBounds (inner);
+    }
+    else
+    {
+        detailArea = {};
     }
 
-    area.removeFromTop (kPad);
+    playlist.setBounds (area);
+}
 
-    // --- Rodapé (Voltar / Avançar) ---
-    auto footer = area.removeFromBottom (kRowH);
-    backButton.setBounds (footer.removeFromLeft (136));
-    nextButton.setBounds (footer.removeFromRight (136));
+// ===========================================================================
+// Gaveta do editor da faixa
+// ===========================================================================
+void MainEditor::handleTrackAction (TrackAction action, int trackId)
+{
+    // Acionar a mesma faixa duas vezes fecha a gaveta.
+    if (detailOpen && detailTrackId == trackId)
+    {
+        closeDetailPanel();
+        return;
+    }
 
-    area.removeFromBottom (kPad);
+    detailOpen = true;
+    detailTrackId = trackId;
+    detailAction = action;
+    updateDetailPanel();
+    resized();
+    repaint();
+}
 
-    // --- Conteúdo ---
-    contentArea = area;
-    const auto inner = contentArea.reduced (kPad);
-    stepGrid.setBounds (inner);
-    smartChords.setBounds (inner);
-    pianoRoll.setBounds (inner);
-    voiceRecorder.setBounds (inner);
-    placeholder.setBounds (inner);
+void MainEditor::closeDetailPanel()
+{
+    detailOpen = false;
+    detailTrackId = -1;
+    updateDetailPanel();
+    resized();
+    repaint();
+}
+
+void MainEditor::updateDetailPanel()
+{
+    closeDetailButton.setVisible (detailOpen);
+    stepGrid.setVisible (detailOpen && detailAction == TrackAction::OpenStepSequencer);
+    smartChords.setVisible (detailOpen && detailAction == TrackAction::OpenSmartChords);
+    pianoRoll.setVisible (detailOpen && detailAction == TrackAction::OpenPianoRoll);
+    voiceRecorder.setVisible (detailOpen && detailAction == TrackAction::ToggleRecording);
+
+    const bool showPlaceholder = detailOpen && detailAction == TrackAction::OpenSampleEditor;
+    placeholder.setVisible (showPlaceholder);
+
+    if (showPlaceholder)
+        placeholder.setContent (txt ("Editor de amostras"),
+                                txt ("Corte de silêncio, Normalizar e Envelope chegam em uma próxima fatia."),
+                                presentation::colourFor (TrackType::Sample));
 }
 
 // ===========================================================================
@@ -214,6 +259,16 @@ void MainEditor::timerCallback()
 
 bool MainEditor::keyPressed (const juce::KeyPress& key, juce::Component*)
 {
+    if (key.getModifiers().isCommandDown() && (key.getKeyCode() == 'Z' || key.getKeyCode() == 'z'))
+    {
+        if (key.getModifiers().isShiftDown())
+            state.getUndoManager().redo();
+        else
+            state.getUndoManager().undo();
+
+        return true;
+    }
+
     if (! key.isKeyCode (juce::KeyPress::spaceKey))
         return false;
 
@@ -223,9 +278,7 @@ bool MainEditor::keyPressed (const juce::KeyPress& key, juce::Component*)
 
 void MainEditor::refreshFromState()
 {
-    const int  step     = state.getCurrentStep();
-    const bool freeMode = state.isFreeMode();
-    const bool playing  = state.isPlaying();
+    const bool playing = state.isPlaying();
 
     // Transporte
     playButton.setToggleState (playing, juce::dontSendNotification);
@@ -238,39 +291,9 @@ void MainEditor::refreshFromState()
     keyBox.setSelectedId (1 + state.getKeyRoot() + (state.getScale() == Scale::Minor ? 12 : 0),
                           juce::dontSendNotification);
 
-    modeButton.setButtonText (txt (freeMode ? "Modo Assistente" : "Modo Livre"));
-
-    // Navegação (desabilitada no Modo Livre)
-    for (int i = 0; i < kNumWizardSteps; ++i)
-    {
-        auto& button = stepButtons[static_cast<std::size_t> (i)];
-        button.setEnabled (! freeMode);
-        button.setToggleState (! freeMode && (i + 1) == step, juce::dontSendNotification);
-    }
-
-    backButton.setEnabled (! freeMode && step > 1);
-    nextButton.setEnabled (! freeMode && step < kNumWizardSteps);
-
-    // Conteúdo
-    const bool showGrid = ! freeMode && step == 1;
-    const bool showSmartChords = ! freeMode && step == 2;
-    const bool showPianoRoll = ! freeMode && step == 3;
-    const bool showVoiceRecorder = ! freeMode && step == 4;
-    stepGrid.setVisible (showGrid);
-    smartChords.setVisible (showSmartChords);
-    pianoRoll.setVisible (showPianoRoll);
-    voiceRecorder.setVisible (showVoiceRecorder);
-    placeholder.setVisible (! showGrid && ! showSmartChords && ! showPianoRoll && ! showVoiceRecorder);
-
-    if (freeMode)
-        placeholder.setContent (txt ("Modo Livre - Timeline"),
-                                txt ("Visualização de arranjo em pistas paralelas (Card 6.1 - em breve). "
-                                     "Seu projeto continua intacto: volte ao Modo Assistente quando quiser."),
-                                col (kTextPrimary));
-    else if (! showGrid && ! showSmartChords && ! showPianoRoll && ! showVoiceRecorder)
-        placeholder.setContent (txt (kStepTitles[step - 1]), txt (kStepDescriptions[step - 1]), stepColour (step));
-
-    repaint();
+    // A faixa que alimentava a gaveta foi removida (ou o projeto foi recarregado).
+    if (detailOpen && state.indexOfTrack (detailTrackId) < 0)
+        closeDetailPanel();
 }
 
 } // namespace mf

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
+#include "Core/FaderScale.h"
 #include "UI/MainEditor.h"
 
 namespace mf
@@ -26,6 +27,10 @@ MainProcessor::MainProcessor()
 
     for (auto& trackVelocities : velocities)
         trackVelocities.fill (100);
+
+    // Slots da Playlist: vazios, ganho unitário (antes de qualquer áudio rodar).
+    slotTypes.fill (-1);
+    slotGains.fill (1.0f);
 
     recomputeTiming();
     audioRecorder->prepare (sampleRate, 0);
@@ -132,6 +137,25 @@ void MainProcessor::pushFullState()
         for (int step = 0; step < kNumSteps; ++step)
             post (EngineEvent::setStepVelocity (track, step, projectState.getStepVelocity (track, step)));
     }
+
+    pushPlaylistState();
+}
+
+void MainProcessor::pushPlaylistState()
+{
+    const int numTracks = projectState.getNumTracks();
+
+    // Todos os slots são reenviados: ao remover uma faixa do meio, os slots
+    // seguintes "sobem" e a engine precisa enxergar a nova ordem.
+    for (int slot = 0; slot < kMaxPlaylistTracks; ++slot)
+    {
+        const auto track = slot < numTracks ? projectState.getTrackByIndex (slot) : nullptr;
+
+        post (EngineEvent::setTrackType (slot, track != nullptr ? static_cast<int> (track->getType()) : -1));
+        post (EngineEvent::setTrackGain (slot, track != nullptr
+                                                   ? fader::gainToPermille (fader::toGain (track->getGain()))
+                                                   : 1000));
+    }
 }
 
 void MainProcessor::valueTreePropertyChanged (juce::ValueTree& changedTree, const juce::Identifier& property)
@@ -164,6 +188,18 @@ void MainProcessor::valueTreePropertyChanged (juce::ValueTree& changedTree, cons
             }
         }
     }
+    else if (changedTree.hasType (IDs::playlistTrack))
+    {
+        // Fader pré-mix arrastado (ou desfeito): só o slot afetado viaja pela fila.
+        const int slot = changedTree.getParent().indexOf (changedTree);
+
+        if (property == IDs::gain && slot >= 0 && slot < kMaxPlaylistTracks)
+        {
+            const float position = static_cast<float> (changedTree.getProperty (IDs::gain,
+                                                                                static_cast<double> (fader::kDefaultPosition)));
+            post (EngineEvent::setTrackGain (slot, fader::gainToPermille (fader::toGain (position))));
+        }
+    }
     else if (changedTree.hasType (IDs::track))
     {
         const int track = changedTree.getParent().indexOf (changedTree);
@@ -182,6 +218,13 @@ void MainProcessor::valueTreePropertyChanged (juce::ValueTree& changedTree, cons
 
 void MainProcessor::valueTreeChildAdded (juce::ValueTree& parent, juce::ValueTree&)
 {
+    // Faixa adicionada à Playlist => ressincroniza os slots.
+    if (parent.hasType (IDs::playlist))
+    {
+        pushPlaylistState();
+        return;
+    }
+
     // Sequenciador substituído (ex.: carregar projeto) => ressincroniza.
     if (parent == projectState.getTree() || parent.hasType (IDs::sequencer))
         pushFullState();
@@ -189,6 +232,12 @@ void MainProcessor::valueTreeChildAdded (juce::ValueTree& parent, juce::ValueTre
 
 void MainProcessor::valueTreeChildRemoved (juce::ValueTree& parent, juce::ValueTree&, int)
 {
+    if (parent.hasType (IDs::playlist))
+    {
+        pushPlaylistState();
+        return;
+    }
+
     if (parent == projectState.getTree() || parent.hasType (IDs::sequencer))
         pushFullState();
 }
@@ -286,6 +335,22 @@ void MainProcessor::drainEvents() noexcept
                 }
                 break;
 
+            case EngineEvent::Type::SetTrackType:
+                if (event.a >= 0 && event.a < kMaxPlaylistTracks)
+                {
+                    slotTypes[static_cast<std::size_t> (event.a)] = isValidTrackType (event.b) ? event.b : -1;
+                    recomputeBusGains();
+                }
+                break;
+
+            case EngineEvent::Type::SetTrackGain:
+                if (event.a >= 0 && event.a < kMaxPlaylistTracks)
+                {
+                    slotGains[static_cast<std::size_t> (event.a)] = fader::permilleToGain (event.b);
+                    recomputeBusGains();
+                }
+                break;
+
             case EngineEvent::Type::ChordNote:
                 if (event.a >= 0 && event.a <= 127)
                 {
@@ -315,6 +380,40 @@ void MainProcessor::drainEvents() noexcept
                 break;
         }
     }
+}
+
+void MainProcessor::recomputeBusGains() noexcept
+{
+    // Primeira faixa de cada tipo manda no seu barramento; sem faixa = ganho 1.
+    float drum = 1.0f;
+    float harmony = 1.0f;
+    float melody = 1.0f;
+    bool hasDrum = false, hasHarmony = false, hasMelody = false;
+
+    for (std::size_t slot = 0; slot < slotTypes.size(); ++slot)
+    {
+        switch (slotTypes[slot])
+        {
+            case static_cast<int> (TrackType::Drum):
+                if (! hasDrum) { drum = slotGains[slot]; hasDrum = true; }
+                break;
+            case static_cast<int> (TrackType::Harmony):
+                if (! hasHarmony) { harmony = slotGains[slot]; hasHarmony = true; }
+                break;
+            case static_cast<int> (TrackType::Melody):
+                if (! hasMelody) { melody = slotGains[slot]; hasMelody = true; }
+                break;
+            default:
+                break;
+        }
+    }
+
+    drumBusGain = drum;
+    previewBusGain = hasHarmony ? harmony : melody;
+
+    // Parado não há "rampa" audível: assume o alvo direto (evita transiente ao dar Play).
+    if (! playing)
+        drumGainSmoothed = drumBusGain;
 }
 
 int MainProcessor::getSwingOffsetSamples (int step) const noexcept
@@ -457,7 +556,7 @@ void MainProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBu
             samplesToNextStep -= 1.0;
         }
 
-        float mix = 0.0f;
+        float drumMix = 0.0f;
         for (std::size_t track = 0; track < static_cast<std::size_t> (kNumTracks); ++track)
         {
             if (activeSamples[track] != nullptr)
@@ -489,7 +588,7 @@ void MainProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBu
                                                       static_cast<float> (remaining) / fadeSamples);
                     sample *= juce::jmin (startFade, endFade);
 
-                    mix += sample * velocityGains[track];
+                    drumMix += sample * velocityGains[track];
                     [[maybe_unused]] const float voiceEnvelope = voices[track].process(); // drena envelopes sintéticas durante custom sample playback
                     samplePositions[track] += 1.0f;
                 }
@@ -501,14 +600,25 @@ void MainProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBu
             else
             {
                 const float voiceSample = voices[track].process();
-                mix += voiceSample * velocityGains[track];
+                drumMix += voiceSample * velocityGains[track];
             }
         }
 
+        float previewMix = 0.0f;
         for (auto& previewVoice : previewVoices)
-            mix += previewVoice.process (sampleRate);
+            previewMix += previewVoice.process (sampleRate);
 
-        mix = std::clamp (mix * kMasterGain, -1.0f, 1.0f);
+        // Fader pré-mix (gain staging) por barramento. Interpolação de 1 polo
+        // por amostra elimina "zipper noise" ao arrastar o fader.
+        if (playing)
+            drumGainSmoothed += (drumBusGain - drumGainSmoothed) * kGainSmoothing;
+        else
+            drumGainSmoothed = drumBusGain;
+
+        previewGainSmoothed += (previewBusGain - previewGainSmoothed) * kGainSmoothing;
+
+        const float mix = std::clamp ((drumMix * drumGainSmoothed + previewMix * previewGainSmoothed) * kMasterGain,
+                                      -1.0f, 1.0f);
 
         for (int ch = 0; ch < numChannels; ++ch)
             buffer.setSample (ch, i, mix);

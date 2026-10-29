@@ -92,10 +92,14 @@ private:
     void post (const EngineEvent& event) noexcept;
     /** Reenvia ao motor tudo o que ele precisa saber (bpm, play, máscaras). */
     void pushFullState();
+    /** Reenvia tipo + fader de TODOS os slots da Playlist (add/remove/load). */
+    void pushPlaylistState();
 
     // ----- Audio thread -----
     void drainEvents() noexcept;
     void recomputeTiming() noexcept;
+    /** Recalcula o ganho pré-mix de cada barramento a partir dos slots (sem alocar). */
+    void recomputeBusGains() noexcept;
     void triggerStep (int step) noexcept;
     [[nodiscard]] int getSwingOffsetSamples (int step) const noexcept;
 
@@ -134,6 +138,19 @@ private:
         void release() noexcept { velocity = 0.0f; }
     };
     std::array<PreviewVoice, 12> previewVoices {};
+
+    // Fader pré-mix por faixa da Playlist (cópias da audio thread; chegam via
+    // EngineEvent::SetTrackType/SetTrackGain). Slice 01: cada TIPO de faixa
+    // alimenta um barramento — Bateria -> drumBusGain; Harmonia/Melodia ->
+    // previewBusGain (pré-escuta). Vale a primeira faixa do tipo; sem faixa = 1.0.
+    // Gravação/Amostra recebem DSP próprio nas próximas fatias.
+    static constexpr float kGainSmoothing = 0.002f;
+    std::array<int, kMaxPlaylistTracks> slotTypes {};    // -1 = slot vazio (preenchido no ctor)
+    std::array<float, kMaxPlaylistTracks> slotGains {};  // ganho linear (preenchido no ctor)
+    float drumBusGain { 1.0f };
+    float previewBusGain { 1.0f };
+    float drumGainSmoothed { 1.0f };
+    float previewGainSmoothed { 1.0f };
 
     // Canal Audio -> UI.
     std::atomic<int> playheadStep { -1 };
