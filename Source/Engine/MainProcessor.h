@@ -11,6 +11,7 @@
 #include "Engine/DrumVoice.h"
 #include "Engine/AudioRecorder.h"
 #include "Engine/EngineEvent.h"
+#include "Engine/MelodySequencer.h"
 #include "Engine/SampleManager.h"
 
 namespace mf
@@ -97,8 +98,12 @@ private:
     void pushFullState();
     /** Reenvia tipo + fader de TODOS os slots da Playlist (add/remove/load). */
     void pushPlaylistState();
-    /** Reenvia a máscara de compassos da Bateria (clipes adicionados/movidos/removidos). */
+    /** Reenvia a máscara de compassos da Bateria e de cada faixa de Melodia (clipes mudaram). */
     void pushArrangementState();
+    /** Reenvia notas + compassos de TODOS os slots de Melodia (e limpa os demais). */
+    void pushMelodyState();
+    /** Uma nota de Melodia entrou/saiu da árvore: envia só essa mudança ao slot da faixa. */
+    void postMelodyNoteChange (const juce::ValueTree& trackNode, const juce::ValueTree& noteNode, bool on);
 
     // ----- Audio thread -----
     void drainEvents() noexcept;
@@ -106,6 +111,10 @@ private:
     /** Recalcula o ganho pré-mix de cada barramento a partir dos slots (sem alocar). */
     void recomputeBusGains() noexcept;
     void triggerStep (int step) noexcept;
+    /** Inicia as notas de Melodia do passo (slots de Melodia audíveis no compasso). */
+    void triggerMelodyStep (int step, int bar) noexcept;
+    /** Solta as notas de Melodia que ainda soam (fim do passo / pause / stop). */
+    void releaseMelodyVoices() noexcept;
     /** Dispara o passo (voz + nota MIDI) se a bateria estiver audível no compasso do passo. */
     void triggerStepInBar (int step, int bar, int sampleOffset, juce::MidiBuffer& midi) noexcept;
     [[nodiscard]] int getSwingOffsetSamples (int step) const noexcept;
@@ -115,7 +124,9 @@ private:
     ProjectState projectState;
     SampleManager sampleManager;
     std::unique_ptr<AudioRecorder> audioRecorder;
-    SpscQueue<EngineEvent, 1024> uiToAudio;
+    // 8192 eventos (128 KiB): um ressincronismo completo (32 slots x 128 notas de Melodia
+    // + máscaras + velocities) cabe com folga.
+    SpscQueue<EngineEvent, 8192> uiToAudio;
 
     // Estado exclusivo da audio thread (cópias locais; nunca acessadas pela UI).
     double sampleRate { 44100.0 };
@@ -164,6 +175,15 @@ private:
     float previewBusGain { 1.0f };
     float drumGainSmoothed { 1.0f };
     float previewGainSmoothed { 1.0f };
+
+    // Melodia por faixa (Slice 04): padrões + vozes. Cada voz lembra o slot de origem
+    // para ser mixada com o fader da própria faixa.
+    struct MelodyVoice : PreviewVoice { int slot { 0 }; };
+    static constexpr std::size_t kNumMelodyVoices = 24;
+    MelodySequencer melodySequencer;
+    std::array<MelodyVoice, kNumMelodyVoices> melodyVoices {};
+    std::size_t melodyStealIndex { 0 };
+    std::array<float, kMaxPlaylistTracks> slotGainSmoothed {};   // ganho suavizado por slot (preenchido no ctor)
 
     // Canal Audio -> UI.
     std::atomic<int> playheadStep { -1 };

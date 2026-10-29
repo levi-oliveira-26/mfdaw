@@ -19,13 +19,17 @@ namespace mf
  *   SetTrackType  : a = slot da Playlist, b = TrackType (0..4) ou -1 (slot vazio)
  *   SetTrackGain  : a = slot da Playlist, b = ganho pré-mix em "por mil" (0..2000)
  *  SetDrumBars   : a = máscara de compassos (bit n = compasso n) cobertos por clipes de Bateria; 0 = sem arranjo
+ *  SetMelodyNote : a = slot, b = passo (0..15), c = altura MIDI | (ligada ? 0x100 : 0)
+ *  SetMelodyClear: a = slot (esvazia só as NOTAS do slot; os compassos vão por SetSlotBars)
+ *  SetSlotBars   : a = slot, b = máscara de compassos cobertos pelos clipes da faixa; 0 = rascunho
  *
  * "Slot" é o índice da faixa na Playlist (0..kMaxPlaylistTracks-1).
  */
 struct EngineEvent
 {
     enum class Type : std::uint8_t { SetBpm, SetPlaying, SetTrackMask, SetStepVelocity, ChordNote,
-                                     SetTrackType, SetTrackGain, SetDrumBars };
+                                     SetTrackType, SetTrackGain, SetDrumBars,
+                                     SetMelodyNote, SetMelodyClear, SetSlotBars };
 
     Type type { Type::SetBpm };
     std::int32_t a { 0 };
@@ -58,6 +62,21 @@ struct EngineEvent
     [[nodiscard]] static EngineEvent setDrumBars (int barMask) noexcept
     {
         return { Type::SetDrumBars, barMask, 0, 0 };
+    }
+
+    [[nodiscard]] static EngineEvent setMelodyNote (int slot, int step, int pitch, bool on) noexcept
+    {
+        return { Type::SetMelodyNote, slot, step, pitch | (on ? 0x100 : 0) };
+    }
+
+    [[nodiscard]] static EngineEvent setMelodyClear (int slot) noexcept
+    {
+        return { Type::SetMelodyClear, slot, 0, 0 };
+    }
+
+    [[nodiscard]] static EngineEvent setSlotBars (int slot, int barMask) noexcept
+    {
+        return { Type::SetSlotBars, slot, barMask, 0 };
     }
 
     [[nodiscard]] static EngineEvent setTrackGain (int slot, int gainPermille) noexcept

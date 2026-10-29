@@ -235,6 +235,7 @@ void MainEditor::updateDetailPanel()
     stepGrid.setVisible (detailOpen && detailAction == TrackAction::OpenStepSequencer);
     smartChords.setVisible (detailOpen && detailAction == TrackAction::OpenSmartChords);
     pianoRoll.setVisible (detailOpen && detailAction == TrackAction::OpenPianoRoll);
+    pianoRoll.setTrackId (detailOpen && detailAction == TrackAction::OpenPianoRoll ? detailTrackId : -1);
     voiceRecorder.setVisible (detailOpen && detailAction == TrackAction::ToggleRecording);
 
     const bool showPlaceholder = detailOpen && detailAction == TrackAction::OpenSampleEditor;

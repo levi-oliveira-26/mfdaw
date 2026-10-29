@@ -56,6 +56,35 @@ juce::String PianoRollComponent::noteName (int midiNote)
     return juce::String (kNames[midiNote % 12]) + juce::String (midiNote / 12 - 1);
 }
 
+void PianoRollComponent::setTrackId (int newTrackId)
+{
+    if (newTrackId == trackId)
+        return;
+
+    trackId = newTrackId;
+    reloadNotes();
+}
+
+void PianoRollComponent::reloadNotes()
+{
+    for (auto& row : notes)
+        row.fill (false);
+
+    if (trackId >= 0)
+    {
+        for (const auto& note : state.getMelodyNotes (trackId))
+            notes[static_cast<std::size_t> (kHighestNote - note.pitch)][static_cast<std::size_t> (note.step)] = true;
+    }
+
+    repaint();
+}
+
+bool PianoRollComponent::commitNote (int row, int step, bool on)
+{
+    // O domínio valida faixa/tipo/limite; o cache só muda via listener (reloadNotes).
+    return trackId >= 0 && state.setMelodyNote (trackId, step, kHighestNote - row, on);
+}
+
 // ---------------------------------------------------------------------------
 // Rolagem vertical
 // ---------------------------------------------------------------------------
@@ -163,12 +192,12 @@ void PianoRollComponent::paint (juce::Graphics& g)
                             static_cast<float> (grid.getY()), static_cast<float> (grid.getBottom()));
     }
 
-    // Notas (apenas as de linhas dentro do tom e visíveis).
-    g.setColour (col (kBrandMelody));
+    // Notas visíveis. Se a tonalidade mudou depois de escrever, as notas que ficaram fora
+    // do tom continuam soando: aparecem apagadas em vez de sumirem.
     for (int row = firstRow; row <= lastRow; ++row)
     {
-        if (! ScaleLock::isNoteInScale (kHighestNote - row, state))
-            continue;
+        const bool inScale = ScaleLock::isNoteInScale (kHighestNote - row, state);
+        g.setColour (inScale ? col (kBrandMelody) : col (kTextMuted).withAlpha (0.55f));
 
         const float y = static_cast<float> (grid.getY()) + static_cast<float> (row * kRowHeight) - scrollY;
 
@@ -239,10 +268,11 @@ int PianoRollComponent::toggleNote (const juce::Point<int>& position)
     if (midiNote < 0)
         return -1;
 
-    auto& active = notes[static_cast<std::size_t> (row)][static_cast<std::size_t> (step)];
-    active = ! active;
-    repaint (gridBounds (*this));
-    return midiNote;
+    const bool turnOn = ! notes[static_cast<std::size_t> (row)][static_cast<std::size_t> (step)];
+    if (! commitNote (row, step, turnOn))
+        return -1;                       // sem faixa, faixa errada ou limite de notas
+
+    return turnOn ? midiNote : -1;       // apagar uma nota não toca pré-escuta
 }
 
 void PianoRollComponent::mouseDown (const juce::MouseEvent& event)
@@ -253,18 +283,14 @@ void PianoRollComponent::mouseDown (const juce::MouseEvent& event)
     if (previewNote >= 0)
         processor.requestNotePreview (previewNote, false);
 
+    state.getUndoManager().beginNewTransaction();   // o gesto inteiro (clique + arrasto) = 1 undo
     previewNote = toggleNote (event.getPosition());
 
+    // A célula do clique já foi tratada (ligada OU apagada): o arrasto só age ao entrar em outra.
+    juce::ignoreUnused (noteAt (event.getPosition(), &previewRow, &previewStep));
+
     if (previewNote >= 0)
-    {
-        juce::ignoreUnused (noteAt (event.getPosition(), &previewRow, &previewStep));
         processor.requestNotePreview (previewNote, true);
-    }
-    else
-    {
-        previewRow = -1;
-        previewStep = -1;
-    }
 }
 
 void PianoRollComponent::mouseDrag (const juce::MouseEvent& event)
@@ -285,16 +311,14 @@ void PianoRollComponent::mouseDrag (const juce::MouseEvent& event)
     previewRow = row;
     previewStep = step;
 
-    if (nextNote >= 0)
-    {
-        notes[static_cast<std::size_t> (row)][static_cast<std::size_t> (step)] = true;
-        repaint (gridBounds (*this));
+    int audibleNote = nextNote;
+    if (nextNote >= 0 && ! commitNote (row, step, true))
+        audibleNote = -1;
 
-        if (nextNote != previewNote)
-            processor.requestNotePreview (nextNote, true);
-    }
+    if (audibleNote >= 0 && audibleNote != previewNote)
+        processor.requestNotePreview (audibleNote, true);
 
-    previewNote = nextNote;
+    previewNote = audibleNote;
 }
 
 void PianoRollComponent::mouseUp (const juce::MouseEvent&)
@@ -313,6 +337,17 @@ void PianoRollComponent::valueTreePropertyChanged (juce::ValueTree&, const juce:
         repaint();
 }
 
-void PianoRollComponent::valueTreeChildAdded (juce::ValueTree&, juce::ValueTree&) {}
-void PianoRollComponent::valueTreeChildRemoved (juce::ValueTree&, juce::ValueTree&, int) {}
+// Nota criada/apagada (inclui undo/redo) ou estrutura da Playlist trocada (carregar projeto,
+// remover a faixa editada): o cache é relido do domínio.
+void PianoRollComponent::valueTreeChildAdded (juce::ValueTree& parent, juce::ValueTree& child)
+{
+    if (child.hasType (IDs::note) || parent.hasType (IDs::playlist) || child.hasType (IDs::playlist))
+        reloadNotes();
+}
+
+void PianoRollComponent::valueTreeChildRemoved (juce::ValueTree& parent, juce::ValueTree& child, int)
+{
+    if (child.hasType (IDs::note) || parent.hasType (IDs::playlist) || child.hasType (IDs::playlist))
+        reloadNotes();
+}
 } // namespace mf
