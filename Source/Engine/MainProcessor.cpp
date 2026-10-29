@@ -141,6 +141,11 @@ void MainProcessor::pushFullState()
     pushPlaylistState();
 }
 
+void MainProcessor::pushArrangementState()
+{
+    post (EngineEvent::setDrumBars (projectState.getDrumBarMask()));
+}
+
 void MainProcessor::pushPlaylistState()
 {
     const int numTracks = projectState.getNumTracks();
@@ -156,6 +161,8 @@ void MainProcessor::pushPlaylistState()
                                                    ? fader::gainToPermille (fader::toGain (track->getGain()))
                                                    : 1000));
     }
+
+    pushArrangementState();   // remover/carregar faixa muda os clipes de bateria
 }
 
 void MainProcessor::valueTreePropertyChanged (juce::ValueTree& changedTree, const juce::Identifier& property)
@@ -200,6 +207,12 @@ void MainProcessor::valueTreePropertyChanged (juce::ValueTree& changedTree, cons
             post (EngineEvent::setTrackGain (slot, fader::gainToPermille (fader::toGain (position))));
         }
     }
+    else if (changedTree.hasType (IDs::clip))
+    {
+        // Clipe movido / redimensionado (ou desfeito): só interessa a posição.
+        if (property == IDs::startBar || property == IDs::lengthBars)
+            pushArrangementState();
+    }
     else if (changedTree.hasType (IDs::track))
     {
         const int track = changedTree.getParent().indexOf (changedTree);
@@ -225,6 +238,13 @@ void MainProcessor::valueTreeChildAdded (juce::ValueTree& parent, juce::ValueTre
         return;
     }
 
+    // Clipe criado numa faixa.
+    if (parent.hasType (IDs::playlistTrack))
+    {
+        pushArrangementState();
+        return;
+    }
+
     // Sequenciador substituído (ex.: carregar projeto) => ressincroniza.
     if (parent == projectState.getTree() || parent.hasType (IDs::sequencer))
         pushFullState();
@@ -235,6 +255,12 @@ void MainProcessor::valueTreeChildRemoved (juce::ValueTree& parent, juce::ValueT
     if (parent.hasType (IDs::playlist))
     {
         pushPlaylistState();
+        return;
+    }
+
+    if (parent.hasType (IDs::playlistTrack))
+    {
+        pushArrangementState();
         return;
     }
 
@@ -304,7 +330,10 @@ void MainProcessor::drainEvents() noexcept
                     samplesToNextStep = 0.0;
                     swingTriggerCountdown = -1;
                     swingTriggerStep = -1;
+                    arrangementBar = 0;
+                    hasScheduledSinceStop = false;
                     playheadStep.store (-1, std::memory_order_relaxed);
+                    playheadBar.store (0, std::memory_order_relaxed);
                     currentBar.store (0, std::memory_order_relaxed);   // Stop = volta ao início da Playlist
                 }
                 else if (event.a == 1)
@@ -334,6 +363,10 @@ void MainProcessor::drainEvents() noexcept
                     velocities[static_cast<std::size_t> (event.a)][static_cast<std::size_t> (event.b)]
                         = static_cast<std::uint8_t> (event.c);
                 }
+                break;
+
+            case EngineEvent::Type::SetDrumBars:
+                drumBarMask = event.a & ((1 << kPlaylistBars) - 1);
                 break;
 
             case EngineEvent::Type::SetTrackType:
@@ -428,6 +461,21 @@ int MainProcessor::getSwingOffsetSamples (int step) const noexcept
                          static_cast<int> (std::round (maximumOffset * amount)));
 }
 
+void MainProcessor::triggerStepInBar (int step, int bar, int sampleOffset, juce::MidiBuffer& midi) noexcept
+{
+    // Fora de um clipe de Bateria o passo é pulado (nem voz, nem nota MIDI).
+    if (! clip::isBarAudible (drumBarMask, bar))
+        return;
+
+    triggerStep (step);
+
+    for (int track = 0; track < kNumTracks; ++track)
+    {
+        if (((masks[static_cast<std::size_t> (track)] >> step) & 1) != 0)
+            midi.addEvent (juce::MidiMessage::noteOn (10, 36 + track, 1.0f), sampleOffset);
+    }
+}
+
 void MainProcessor::triggerStep (int step) noexcept
 {
     for (std::size_t track = 0; track < static_cast<std::size_t> (kNumTracks); ++track)
@@ -487,16 +535,7 @@ void MainProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBu
 
             if (swingTriggerCountdown <= 0)
             {
-                triggerStep (swingTriggerStep);
-
-                for (int track = 0; track < kNumTracks; ++track)
-                {
-                    if (((masks[static_cast<std::size_t> (track)] >> swingTriggerStep) & 1) != 0)
-                    {
-                        const auto note = juce::MidiMessage::noteOn (10, 36 + track, 1.0f);
-                        midi.addEvent (note, i);
-                    }
-                }
+                triggerStepInBar (swingTriggerStep, swingTriggerBar, i, midi);
 
                 swingTriggerCountdown = -1;
                 swingTriggerStep = -1;
@@ -528,25 +567,24 @@ void MainProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBu
                     }
                 }
 
+                // Compasso (0-based, com loop) do passo que está sendo agendado: o primeiro
+                // passo 0 depois do Stop é o compasso 0; cada passo 0 seguinte avança um.
+                if (scheduledStep == 0 && hasScheduledSinceStop)
+                    arrangementBar = clip::nextBar (arrangementBar);
+                hasScheduledSinceStop = true;
+
                 if (swingOffset > 0)
                 {
                     swingTriggerStep = scheduledStep;
+                    swingTriggerBar = arrangementBar;
                     swingTriggerCountdown = swingOffset;
                 }
                 else
                 {
-                    triggerStep (scheduledStep);
-
-                    for (int track = 0; track < kNumTracks; ++track)
-                    {
-                        if (((masks[static_cast<std::size_t> (track)] >> scheduledStep) & 1) != 0)
-                        {
-                            const auto note = juce::MidiMessage::noteOn (10, 36 + track, 1.0f);
-                            midi.addEvent (note, i);
-                        }
-                    }
+                    triggerStepInBar (scheduledStep, arrangementBar, i, midi);
                 }
 
+                playheadBar.store (arrangementBar, std::memory_order_relaxed);
                 playheadStep.store (scheduledStep, std::memory_order_relaxed);
                 if (scheduledStep == 0 && playheadSampleIndex > 0)
                     currentBar.fetch_add (1, std::memory_order_relaxed);

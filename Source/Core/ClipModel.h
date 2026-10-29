@@ -43,6 +43,30 @@ namespace clip
     const int latest = kPlaylistBars - (lengthBars < kMinClipBars ? kMinClipBars : lengthBars);
     return startBar < 0 ? 0 : (startBar > latest ? latest : startBar);
 }
+
+/** Máscara de bits dos compassos [startBar, startBar+lengthBars); 0 se o intervalo é inválido. */
+[[nodiscard]] constexpr int barMaskFor (int startBar, int lengthBars) noexcept
+{
+    return isValidRange (startBar, lengthBars) ? (((1 << lengthBars) - 1) << startBar) : 0;
+}
+
+/** Compasso seguinte, com loop ao fim da Playlist. */
+[[nodiscard]] constexpr int nextBar (int bar) noexcept
+{
+    return (bar + 1) % kPlaylistBars;
+}
+
+/**
+ * A bateria está audível neste compasso?
+ *   barMask == 0  -> "modo rascunho": ainda não há clipe de bateria, o padrão toca sempre
+ *                    (editar o ritmo antes de arranjar continua dando retorno sonoro);
+ *   barMask != 0  -> arranjo: só soa dentro de clipes de faixas de bateria.
+ * Função pura e sem alocação: é chamada pela audio thread.
+ */
+[[nodiscard]] constexpr bool isBarAudible (int barMask, int bar) noexcept
+{
+    return barMask == 0 || (bar >= 0 && bar < kPlaylistBars && ((barMask >> bar) & 1) != 0);
+}
 } // namespace clip
 
 } // namespace mf

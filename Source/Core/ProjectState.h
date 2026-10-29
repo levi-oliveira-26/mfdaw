@@ -171,6 +171,8 @@ public:
     /** Clipes da faixa em ordem crescente de início (vazio se a faixa não existe). */
     [[nodiscard]] std::vector<ClipData> getClips (int trackId) const;
     /** Maior comprimento que um clipe iniciado em `startBar` pode ter (0 = posição ocupada/inválida). */
+    /** União dos compassos cobertos por clipes de faixas de Bateria (bit n = compasso n). 0 = nenhum. */
+    [[nodiscard]] int getDrumBarMask() const;
     [[nodiscard]] int getMaxClipLengthAt (int trackId, int startBar, int ignoreClipId = -1) const;
 
     // --- Voz / Audio Clips (Card 4.1) ---

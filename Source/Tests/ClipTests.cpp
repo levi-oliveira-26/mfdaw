@@ -4,6 +4,8 @@
 
 #include "Core/ClipModel.h"
 #include "Core/ProjectState.h"
+#include "Core/SpscQueue.h"
+#include "Engine/EngineEvent.h"
 
 namespace mf::tests
 {
@@ -206,6 +208,68 @@ public:
                 expect (clip::isValidRange (c.startBar, c.lengthBars));
             expect (! clip::overlaps (clips[0].startBar, clips[0].lengthBars,
                                       clips[1].startBar, clips[1].lengthBars));
+        }
+
+        beginTest ("Arrangement gate math: bar masks, loop and draft mode");
+        {
+            expectEquals (clip::barMaskFor (0, 1), 0b1);
+            expectEquals (clip::barMaskFor (2, 3), 0b11100);
+            expectEquals (clip::barMaskFor (kPlaylistBars - 1, 1), 1 << (kPlaylistBars - 1));
+            expectEquals (clip::barMaskFor (kPlaylistBars - 1, 2), 0);          // inválido
+            expectEquals (clip::barMaskFor (-1, 2), 0);
+
+            expectEquals (clip::nextBar (0), 1);
+            expectEquals (clip::nextBar (kPlaylistBars - 1), 0);                // loop
+
+            for (int bar = 0; bar < kPlaylistBars; ++bar)
+                expect (clip::isBarAudible (0, bar));                           // rascunho: sempre audível
+
+            expect (clip::isBarAudible (0b11, 0));
+            expect (clip::isBarAudible (0b11, 1));
+            expect (! clip::isBarAudible (0b11, 2));
+            expect (! clip::isBarAudible (0b11, -1));
+            expect (! clip::isBarAudible (0b11, kPlaylistBars));
+        }
+
+        beginTest ("getDrumBarMask: only Drum tracks count, union across tracks, follows edits and undo");
+        {
+            ProjectState state;
+            expectEquals (state.getDrumBarMask(), 0);
+
+            const int drumA = state.addTrack (TrackType::Drum);
+            const int drumB = state.addTrack (TrackType::Drum);
+            const int melody = state.addTrack (TrackType::Melody);
+
+            state.addClip (melody, 0, 8);
+            expectEquals (state.getDrumBarMask(), 0);                           // Melodia não entra
+
+            const int a = state.addClip (drumA, 0, 2);
+            state.addClip (drumB, 1, 3);                                        // [1,4) sobrepõe [0,2) em outra faixa
+            expectEquals (state.getDrumBarMask(), 0b1111);
+
+            expect (state.setClipRange (drumA, a, 8, 2));
+            expectEquals (state.getDrumBarMask(), 0b1110 | (0b11 << 8));
+
+            state.getUndoManager().undo();
+            expectEquals (state.getDrumBarMask(), 0b1111);
+
+            state.removeTrack (drumB);
+            expectEquals (state.getDrumBarMask(), 0b11);
+        }
+
+        beginTest ("SetDrumBars travels through the lock-free queue as a fixed-size event");
+        {
+            ProjectState state;
+            const int track = state.addTrack (TrackType::Drum);
+            state.addClip (track, 4, 4);
+
+            SpscQueue<EngineEvent, 8> queue;
+            expect (queue.push (EngineEvent::setDrumBars (state.getDrumBarMask())));
+
+            EngineEvent event;
+            expect (queue.pop (event));
+            expect (event.type == EngineEvent::Type::SetDrumBars);
+            expectEquals (event.a, 0b11110000);
         }
     }
 };

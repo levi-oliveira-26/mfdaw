@@ -473,6 +473,29 @@ std::vector<ClipData> ProjectState::getClips (int trackId) const
     return result;
 }
 
+int ProjectState::getDrumBarMask() const
+{
+    int mask = 0;
+    const auto playlist = tree.getChildWithName (IDs::playlist);
+
+    for (int t = 0; t < playlist.getNumChildren(); ++t)
+    {
+        const auto trackNode = playlist.getChild (t);
+        if (static_cast<int> (trackNode.getProperty (IDs::trackType, -1)) != static_cast<int> (TrackType::Drum))
+            continue;
+
+        for (int c = 0; c < trackNode.getNumChildren(); ++c)
+        {
+            const auto node = trackNode.getChild (c);
+            if (node.hasType (IDs::clip))
+                mask |= clip::barMaskFor (static_cast<int> (node.getProperty (IDs::startBar, 0)),
+                                          static_cast<int> (node.getProperty (IDs::lengthBars, 0)));
+        }
+    }
+
+    return mask;
+}
+
 int ProjectState::getMaxClipLengthAt (int trackId, int startBar, int ignoreClipId) const
 {
     if (! findTrackNode (trackId).isValid() || startBar < 0 || startBar >= kPlaylistBars)

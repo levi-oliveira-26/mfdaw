@@ -263,7 +263,7 @@ void MainEditor::timerCallback()
     // Pausado (step < 0) mantém a última posição; só o Stop volta ao início.
     if (step >= 0)
     {
-        const int bar = engine.getCurrentBar() % kPlaylistBars;
+        const int bar = engine.getPlayheadBar();
         lastPlayheadBars = static_cast<float> (bar) + static_cast<float> (step) / static_cast<float> (kNumSteps);
         playlist.setPlayheadBars (lastPlayheadBars);
     }
