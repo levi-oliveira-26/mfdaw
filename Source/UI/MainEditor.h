@@ -88,6 +88,7 @@ private:
     TrackAction detailAction { TrackAction::OpenStepSequencer };
 
     bool fullScreenRequested { false };
+    float lastPlayheadBars { 0.0f };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainEditor)
 };

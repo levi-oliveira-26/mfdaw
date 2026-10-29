@@ -11,6 +11,7 @@
 #include "Engine/DrumVoice.h"
 #include "Engine/AudioRecorder.h"
 #include "Engine/EngineEvent.h"
+#include "Engine/MelodySequencer.h"
 #include "Engine/SampleManager.h"
 
 namespace mf
@@ -51,6 +52,9 @@ public:
     [[nodiscard]] int getRecordingCountIn() const noexcept { return recordingCountIn.load (std::memory_order_relaxed); }
     [[nodiscard]] int getCurrentBar() const noexcept { return currentBar.load (std::memory_order_relaxed); }
     [[nodiscard]] bool consumeRecordingStart() noexcept { return recordingStartSignal.exchange (false, std::memory_order_acq_rel); }
+
+    /** Compasso (0-based, 0..kPlaylistBars-1, com loop) do passo mais recente. Thread-safe. */
+    [[nodiscard]] int getPlayheadBar() const noexcept { return playheadBar.load (std::memory_order_relaxed); }
 
     /** Passo (0..15) que acabou de ser disparado, ou -1 se parado. Thread-safe. */
     [[nodiscard]] int getPlayheadStep() const noexcept { return playheadStep.load (std::memory_order_relaxed); }
@@ -94,6 +98,12 @@ private:
     void pushFullState();
     /** Reenvia tipo + fader de TODOS os slots da Playlist (add/remove/load). */
     void pushPlaylistState();
+    /** Reenvia a máscara de compassos da Bateria e de cada faixa de Melodia (clipes mudaram). */
+    void pushArrangementState();
+    /** Reenvia notas + compassos de TODOS os slots de Melodia (e limpa os demais). */
+    void pushMelodyState();
+    /** Uma nota de Melodia entrou/saiu da árvore: envia só essa mudança ao slot da faixa. */
+    void postMelodyNoteChange (const juce::ValueTree& trackNode, const juce::ValueTree& noteNode, bool on);
 
     // ----- Audio thread -----
     void drainEvents() noexcept;
@@ -101,6 +111,12 @@ private:
     /** Recalcula o ganho pré-mix de cada barramento a partir dos slots (sem alocar). */
     void recomputeBusGains() noexcept;
     void triggerStep (int step) noexcept;
+    /** Inicia as notas de Melodia do passo (slots de Melodia audíveis no compasso). */
+    void triggerMelodyStep (int step, int bar) noexcept;
+    /** Solta as notas de Melodia que ainda soam (fim do passo / pause / stop). */
+    void releaseMelodyVoices() noexcept;
+    /** Dispara o passo (voz + nota MIDI) se a bateria estiver audível no compasso do passo. */
+    void triggerStepInBar (int step, int bar, int sampleOffset, juce::MidiBuffer& midi) noexcept;
     [[nodiscard]] int getSwingOffsetSamples (int step) const noexcept;
 
     static constexpr float kMasterGain = 0.7f;
@@ -108,7 +124,9 @@ private:
     ProjectState projectState;
     SampleManager sampleManager;
     std::unique_ptr<AudioRecorder> audioRecorder;
-    SpscQueue<EngineEvent, 1024> uiToAudio;
+    // 8192 eventos (128 KiB): um ressincronismo completo (32 slots x 128 notas de Melodia
+    // + máscaras + velocities) cabe com folga.
+    SpscQueue<EngineEvent, 8192> uiToAudio;
 
     // Estado exclusivo da audio thread (cópias locais; nunca acessadas pela UI).
     double sampleRate { 44100.0 };
@@ -120,6 +138,12 @@ private:
     double samplesToNextStep { 0.0 };
     int swingTriggerCountdown { -1 };
     int swingTriggerStep { -1 };
+    int swingTriggerBar { 0 };         // compasso do passo adiado (o swing pode cruzar a barra)
+
+    // Arranjo (cópias da audio thread; chegam por EngineEvent::SetDrumBars).
+    int drumBarMask { 0 };             // 0 = modo rascunho (padrão toca sempre)
+    int arrangementBar { 0 };          // compasso do passo mais recente agendado
+    bool hasScheduledSinceStop { false };
     std::array<int, kNumTracks> masks {};
     std::array<std::array<std::uint8_t, kNumSteps>, kNumTracks> velocities {};
     std::array<float, kNumTracks> velocityGains { 1.0f };
@@ -152,9 +176,19 @@ private:
     float drumGainSmoothed { 1.0f };
     float previewGainSmoothed { 1.0f };
 
+    // Melodia por faixa (Slice 04): padrões + vozes. Cada voz lembra o slot de origem
+    // para ser mixada com o fader da própria faixa.
+    struct MelodyVoice : PreviewVoice { int slot { 0 }; };
+    static constexpr std::size_t kNumMelodyVoices = 24;
+    MelodySequencer melodySequencer;
+    std::array<MelodyVoice, kNumMelodyVoices> melodyVoices {};
+    std::size_t melodyStealIndex { 0 };
+    std::array<float, kMaxPlaylistTracks> slotGainSmoothed {};   // ganho suavizado por slot (preenchido no ctor)
+
     // Canal Audio -> UI.
     std::atomic<int> playheadStep { -1 };
     std::atomic<int> currentBar { 0 };
+    std::atomic<int> playheadBar { 0 };
     std::atomic<int> recordingStartBar { 0 };
     std::atomic<std::uint32_t> droppedEvents { 0 };
 

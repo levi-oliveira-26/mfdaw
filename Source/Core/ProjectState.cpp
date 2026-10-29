@@ -1,5 +1,7 @@
 #include "Core/ProjectState.h"
 
+#include <algorithm>
+
 #include "Core/FaderScale.h"
 
 namespace mf
@@ -208,6 +210,95 @@ void ProjectState::sanitizePlaylist()
 
     if (static_cast<int> (playlist.getProperty (IDs::nextTrackId, 0)) != highestId + 1)
         playlist.setProperty (IDs::nextTrackId, highestId + 1, nullptr);
+
+    // 3) Clipes: só nós CLIP válidos, dentro do projeto, sem sobreposição e com ids únicos.
+    int highestClipId = static_cast<int> (playlist.getProperty (IDs::nextClipId, 1)) - 1;
+    for (int t = 0; t < playlist.getNumChildren(); ++t)
+    {
+        const auto trackNode = playlist.getChild (t);
+        for (int c = 0; c < trackNode.getNumChildren(); ++c)
+            highestClipId = juce::jmax (highestClipId,
+                                        static_cast<int> (trackNode.getChild (c).getProperty (IDs::clipId, 0)));
+    }
+
+    juce::Array<int> usedClipIds;
+    for (int t = 0; t < playlist.getNumChildren(); ++t)
+    {
+        auto trackNode = playlist.getChild (t);
+        std::vector<ClipData> kept;
+
+        for (int c = 0; c < trackNode.getNumChildren();)
+        {
+            auto node = trackNode.getChild (c);
+
+            if (node.hasType (IDs::note))   // validadas no passo 4
+            {
+                ++c;
+                continue;
+            }
+
+            const int start  = static_cast<int> (node.getProperty (IDs::startBar, -1));
+            const int length = static_cast<int> (node.getProperty (IDs::lengthBars, 0));
+
+            bool valid = node.hasType (IDs::clip) && clip::isValidRange (start, length);
+            for (const auto& other : kept)
+                if (valid && clip::overlaps (start, length, other.startBar, other.lengthBars))
+                    valid = false;
+
+            if (! valid)
+            {
+                trackNode.removeChild (c, nullptr);
+                continue;
+            }
+
+            int id = static_cast<int> (node.getProperty (IDs::clipId, 0));
+            if (id <= 0 || usedClipIds.contains (id))
+            {
+                id = ++highestClipId;
+                node.setProperty (IDs::clipId, id, nullptr);
+            }
+
+            usedClipIds.add (id);
+            kept.push_back ({ id, start, length });
+            ++c;
+        }
+    }
+
+    if (static_cast<int> (playlist.getProperty (IDs::nextClipId, 0)) != highestClipId + 1)
+        playlist.setProperty (IDs::nextClipId, highestClipId + 1, nullptr);
+
+    // 4) Notas: só em faixas de Melodia; passo/altura válidos; sem duplicatas; limite por faixa.
+    for (int t = 0; t < playlist.getNumChildren(); ++t)
+    {
+        auto trackNode = playlist.getChild (t);
+        const bool isMelody = static_cast<int> (trackNode.getProperty (IDs::trackType, -1))
+                              == static_cast<int> (TrackType::Melody);
+        juce::Array<int> seen;
+
+        for (int c = 0; c < trackNode.getNumChildren();)
+        {
+            auto node = trackNode.getChild (c);
+            if (! node.hasType (IDs::note))
+            {
+                ++c;
+                continue;
+            }
+
+            const int step  = static_cast<int> (node.getProperty (IDs::noteStep, -1));
+            const int pitch = static_cast<int> (node.getProperty (IDs::notePitch, -1));
+            const int key   = step * 128 + pitch;
+
+            if (! isMelody || ! melody::isValidNote (step, pitch) || seen.contains (key)
+                || seen.size() >= kMaxMelodyNotesPerTrack)
+            {
+                trackNode.removeChild (c, nullptr);
+                continue;
+            }
+
+            seen.add (key);
+            ++c;
+        }
+    }
 }
 
 int ProjectState::allocateTrackId()
@@ -220,6 +311,28 @@ int ProjectState::allocateTrackId()
 
     playlist.setProperty (IDs::nextTrackId, next + 1, nullptr);
     return next;
+}
+
+int ProjectState::allocateClipId()
+{
+    auto playlist = tree.getChildWithName (IDs::playlist);
+    int next = static_cast<int> (playlist.getProperty (IDs::nextClipId, 1));
+
+    for (int t = 0; t < playlist.getNumChildren(); ++t)
+    {
+        const auto trackNode = playlist.getChild (t);
+        for (int c = 0; c < trackNode.getNumChildren(); ++c)
+            next = juce::jmax (next, static_cast<int> (trackNode.getChild (c).getProperty (IDs::clipId, 0)) + 1);
+    }
+
+    playlist.setProperty (IDs::nextClipId, next + 1, nullptr);   // contador não é desfeito: ids nunca voltam
+    return next;
+}
+
+juce::ValueTree ProjectState::findTrackNode (int trackId) const
+{
+    const int index = indexOfTrack (trackId);
+    return index < 0 ? juce::ValueTree() : tree.getChildWithName (IDs::playlist).getChild (index);
 }
 
 // ---------------------------------------------------------------------------
@@ -249,6 +362,7 @@ int ProjectState::addTrack (TrackType type)
 
     // O nó já nasce completo (id, tipo, nome, fader) antes de entrar na árvore:
     // quem escuta valueTreeChildAdded enxerga um estado consistente.
+    undoManager.beginNewTransaction();
     playlist.appendChild (TrackModel::createNode (type, id, name), &undoManager);
     return id;
 }
@@ -259,6 +373,7 @@ bool ProjectState::removeTrack (int trackId)
     if (index < 0)
         return false;
 
+    undoManager.beginNewTransaction();
     tree.getChildWithName (IDs::playlist).removeChild (index, &undoManager);
     return true;
 }
@@ -291,6 +406,251 @@ std::unique_ptr<TrackModel> ProjectState::getTrackByIndex (int index)
 std::unique_ptr<TrackModel> ProjectState::getTrackById (int trackId)
 {
     return getTrackByIndex (indexOfTrack (trackId));
+}
+
+// ---------------------------------------------------------------------------
+// Clipes (Vertical Slice 02)
+// ---------------------------------------------------------------------------
+bool ProjectState::canPlaceClip (int trackId, int startBar, int lengthBars, int ignoreClipId) const
+{
+    const auto trackNode = findTrackNode (trackId);
+    if (! trackNode.isValid() || ! clip::isValidRange (startBar, lengthBars))
+        return false;
+
+    for (int c = 0; c < trackNode.getNumChildren(); ++c)
+    {
+        const auto other = trackNode.getChild (c);
+        if (! other.hasType (IDs::clip) || static_cast<int> (other.getProperty (IDs::clipId, -1)) == ignoreClipId)
+            continue;
+
+        if (clip::overlaps (startBar, lengthBars,
+                            static_cast<int> (other.getProperty (IDs::startBar, 0)),
+                            static_cast<int> (other.getProperty (IDs::lengthBars, 0))))
+            return false;
+    }
+
+    return true;
+}
+
+int ProjectState::addClip (int trackId, int startBar, int lengthBars)
+{
+    if (! canPlaceClip (trackId, startBar, lengthBars))
+        return -1;
+
+    auto trackNode = findTrackNode (trackId);
+    const int id = allocateClipId();
+
+    juce::ValueTree node (IDs::clip);
+    node.setProperty (IDs::clipId, id, nullptr);
+    node.setProperty (IDs::startBar, startBar, nullptr);
+    node.setProperty (IDs::lengthBars, lengthBars, nullptr);
+
+    undoManager.beginNewTransaction();
+    trackNode.appendChild (node, &undoManager);
+    return id;
+}
+
+bool ProjectState::removeClip (int trackId, int clipId)
+{
+    auto trackNode = findTrackNode (trackId);
+
+    for (int c = 0; c < trackNode.getNumChildren(); ++c)
+    {
+        if (trackNode.getChild (c).hasType (IDs::clip)
+            && static_cast<int> (trackNode.getChild (c).getProperty (IDs::clipId, -1)) == clipId)
+        {
+            undoManager.beginNewTransaction();
+            trackNode.removeChild (c, &undoManager);
+            return true;
+        }
+    }
+
+    return false;
+}
+
+bool ProjectState::setClipRange (int trackId, int clipId, int startBar, int lengthBars)
+{
+    auto trackNode = findTrackNode (trackId);
+
+    for (int c = 0; c < trackNode.getNumChildren(); ++c)
+    {
+        auto node = trackNode.getChild (c);
+        if (! node.hasType (IDs::clip) || static_cast<int> (node.getProperty (IDs::clipId, -1)) != clipId)
+            continue;
+
+        if (! canPlaceClip (trackId, startBar, lengthBars, clipId))
+            return false;
+
+        if (static_cast<int> (node.getProperty (IDs::startBar, -1)) == startBar
+            && static_cast<int> (node.getProperty (IDs::lengthBars, -1)) == lengthBars)
+            return true;   // nada a fazer (não suja o projeto nem o histórico)
+
+        undoManager.beginNewTransaction();
+        node.setProperty (IDs::startBar, startBar, &undoManager);
+        node.setProperty (IDs::lengthBars, lengthBars, &undoManager);
+        return true;
+    }
+
+    return false;
+}
+
+std::vector<ClipData> ProjectState::getClips (int trackId) const
+{
+    std::vector<ClipData> result;
+    const auto trackNode = findTrackNode (trackId);
+
+    for (int c = 0; c < trackNode.getNumChildren(); ++c)
+    {
+        const auto node = trackNode.getChild (c);
+        if (node.hasType (IDs::clip))
+            result.push_back ({ static_cast<int> (node.getProperty (IDs::clipId, -1)),
+                                static_cast<int> (node.getProperty (IDs::startBar, 0)),
+                                static_cast<int> (node.getProperty (IDs::lengthBars, 0)) });
+    }
+
+    std::sort (result.begin(), result.end(),
+               [] (const ClipData& a, const ClipData& b) { return a.startBar < b.startBar; });
+    return result;
+}
+
+int ProjectState::getDrumBarMask() const
+{
+    int mask = 0;
+    const auto playlist = tree.getChildWithName (IDs::playlist);
+
+    for (int t = 0; t < playlist.getNumChildren(); ++t)
+    {
+        const auto trackNode = playlist.getChild (t);
+        if (static_cast<int> (trackNode.getProperty (IDs::trackType, -1)) != static_cast<int> (TrackType::Drum))
+            continue;
+
+        for (int c = 0; c < trackNode.getNumChildren(); ++c)
+        {
+            const auto node = trackNode.getChild (c);
+            if (node.hasType (IDs::clip))
+                mask |= clip::barMaskFor (static_cast<int> (node.getProperty (IDs::startBar, 0)),
+                                          static_cast<int> (node.getProperty (IDs::lengthBars, 0)));
+        }
+    }
+
+    return mask;
+}
+
+int ProjectState::getTrackBarMask (int trackId) const
+{
+    int mask = 0;
+
+    for (const auto& c : getClips (trackId))
+        mask |= clip::barMaskFor (c.startBar, c.lengthBars);
+
+    return mask;
+}
+
+// ---------------------------------------------------------------------------
+// Notas de Melodia (Vertical Slice 04)
+// ---------------------------------------------------------------------------
+namespace
+{
+int indexOfNote (const juce::ValueTree& trackNode, int step, int pitch)
+{
+    for (int c = 0; c < trackNode.getNumChildren(); ++c)
+    {
+        const auto node = trackNode.getChild (c);
+        if (node.hasType (IDs::note)
+            && static_cast<int> (node.getProperty (IDs::noteStep, -1)) == step
+            && static_cast<int> (node.getProperty (IDs::notePitch, -1)) == pitch)
+            return c;
+    }
+
+    return -1;
+}
+
+int countNotes (const juce::ValueTree& trackNode)
+{
+    int count = 0;
+    for (int c = 0; c < trackNode.getNumChildren(); ++c)
+        if (trackNode.getChild (c).hasType (IDs::note))
+            ++count;
+
+    return count;
+}
+} // namespace
+
+bool ProjectState::setMelodyNote (int trackId, int step, int pitch, bool on)
+{
+    auto trackNode = findTrackNode (trackId);
+
+    if (! trackNode.isValid()
+        || static_cast<int> (trackNode.getProperty (IDs::trackType, -1)) != static_cast<int> (TrackType::Melody)
+        || ! melody::isValidNote (step, pitch))
+        return false;
+
+    const int existing = indexOfNote (trackNode, step, pitch);
+
+    if (on)
+    {
+        if (existing >= 0)
+            return true;
+
+        if (countNotes (trackNode) >= kMaxMelodyNotesPerTrack)
+            return false;
+
+        juce::ValueTree node (IDs::note);
+        node.setProperty (IDs::noteStep, step, nullptr);
+        node.setProperty (IDs::notePitch, pitch, nullptr);
+        trackNode.appendChild (node, &undoManager);
+        return true;
+    }
+
+    if (existing >= 0)
+        trackNode.removeChild (existing, &undoManager);
+
+    return true;
+}
+
+bool ProjectState::hasMelodyNote (int trackId, int step, int pitch) const
+{
+    return indexOfNote (findTrackNode (trackId), step, pitch) >= 0;
+}
+
+std::vector<MelodyNote> ProjectState::getMelodyNotes (int trackId) const
+{
+    std::vector<MelodyNote> result;
+    const auto trackNode = findTrackNode (trackId);
+
+    for (int c = 0; c < trackNode.getNumChildren(); ++c)
+    {
+        const auto node = trackNode.getChild (c);
+        if (node.hasType (IDs::note))
+            result.push_back ({ static_cast<int> (node.getProperty (IDs::noteStep, 0)),
+                                static_cast<int> (node.getProperty (IDs::notePitch, 60)) });
+    }
+
+    std::sort (result.begin(), result.end(), [] (const MelodyNote& a, const MelodyNote& b)
+               { return a.step != b.step ? a.step < b.step : a.pitch < b.pitch; });
+    return result;
+}
+
+int ProjectState::getMaxClipLengthAt (int trackId, int startBar, int ignoreClipId) const
+{
+    if (! findTrackNode (trackId).isValid() || startBar < 0 || startBar >= kPlaylistBars)
+        return 0;
+
+    int limit = kPlaylistBars - startBar;
+
+    for (const auto& other : getClips (trackId))
+    {
+        if (other.id == ignoreClipId)
+            continue;
+
+        if (other.startBar <= startBar && startBar < other.endBar())
+            return 0;
+
+        if (other.startBar > startBar)
+            limit = juce::jmin (limit, other.startBar - startBar);
+    }
+
+    return limit;
 }
 
 // ---------------------------------------------------------------------------

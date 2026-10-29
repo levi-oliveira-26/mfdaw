@@ -31,6 +31,7 @@ MainProcessor::MainProcessor()
     // Slots da Playlist: vazios, ganho unitário (antes de qualquer áudio rodar).
     slotTypes.fill (-1);
     slotGains.fill (1.0f);
+    slotGainSmoothed.fill (1.0f);
 
     recomputeTiming();
     audioRecorder->prepare (sampleRate, 0);
@@ -141,6 +142,38 @@ void MainProcessor::pushFullState()
     pushPlaylistState();
 }
 
+void MainProcessor::pushArrangementState()
+{
+    post (EngineEvent::setDrumBars (projectState.getDrumBarMask()));
+
+    // Máscara de compassos de CADA slot (0 para vazios / não-Melodia): assim um slot
+    // que deixou de ser Melodia nunca guarda uma máscara velha.
+    const int numTracks = projectState.getNumTracks();
+    for (int slot = 0; slot < kMaxPlaylistTracks; ++slot)
+    {
+        const auto track = slot < numTracks ? projectState.getTrackByIndex (slot) : nullptr;
+        const bool isMelody = track != nullptr && track->getType() == TrackType::Melody;
+        post (EngineEvent::setSlotBars (slot, isMelody ? projectState.getTrackBarMask (track->getId()) : 0));
+    }
+}
+
+void MainProcessor::pushMelodyState()
+{
+    const int numTracks = projectState.getNumTracks();
+
+    for (int slot = 0; slot < kMaxPlaylistTracks; ++slot)
+    {
+        post (EngineEvent::setMelodyClear (slot));
+
+        const auto track = slot < numTracks ? projectState.getTrackByIndex (slot) : nullptr;
+        if (track == nullptr || track->getType() != TrackType::Melody)
+            continue;
+
+        for (const auto& note : projectState.getMelodyNotes (track->getId()))
+            post (EngineEvent::setMelodyNote (slot, note.step, note.pitch, true));
+    }
+}
+
 void MainProcessor::pushPlaylistState()
 {
     const int numTracks = projectState.getNumTracks();
@@ -156,6 +189,9 @@ void MainProcessor::pushPlaylistState()
                                                    ? fader::gainToPermille (fader::toGain (track->getGain()))
                                                    : 1000));
     }
+
+    pushMelodyState();        // slots mudam de lugar: notas de Melodia acompanham
+    pushArrangementState();   // remover/carregar faixa muda os clipes (bateria e melodia)
 }
 
 void MainProcessor::valueTreePropertyChanged (juce::ValueTree& changedTree, const juce::Identifier& property)
@@ -200,6 +236,12 @@ void MainProcessor::valueTreePropertyChanged (juce::ValueTree& changedTree, cons
             post (EngineEvent::setTrackGain (slot, fader::gainToPermille (fader::toGain (position))));
         }
     }
+    else if (changedTree.hasType (IDs::clip))
+    {
+        // Clipe movido / redimensionado (ou desfeito): só interessa a posição.
+        if (property == IDs::startBar || property == IDs::lengthBars)
+            pushArrangementState();
+    }
     else if (changedTree.hasType (IDs::track))
     {
         const int track = changedTree.getParent().indexOf (changedTree);
@@ -216,7 +258,7 @@ void MainProcessor::valueTreePropertyChanged (juce::ValueTree& changedTree, cons
     }
 }
 
-void MainProcessor::valueTreeChildAdded (juce::ValueTree& parent, juce::ValueTree&)
+void MainProcessor::valueTreeChildAdded (juce::ValueTree& parent, juce::ValueTree& child)
 {
     // Faixa adicionada à Playlist => ressincroniza os slots.
     if (parent.hasType (IDs::playlist))
@@ -225,12 +267,21 @@ void MainProcessor::valueTreeChildAdded (juce::ValueTree& parent, juce::ValueTre
         return;
     }
 
+    if (parent.hasType (IDs::playlistTrack))
+    {
+        if (child.hasType (IDs::note))
+            postMelodyNoteChange (parent, child, true);   // nota criada (ou refeita por redo)
+        else
+            pushArrangementState();                       // clipe criado numa faixa
+        return;
+    }
+
     // Sequenciador substituído (ex.: carregar projeto) => ressincroniza.
     if (parent == projectState.getTree() || parent.hasType (IDs::sequencer))
         pushFullState();
 }
 
-void MainProcessor::valueTreeChildRemoved (juce::ValueTree& parent, juce::ValueTree&, int)
+void MainProcessor::valueTreeChildRemoved (juce::ValueTree& parent, juce::ValueTree& child, int)
 {
     if (parent.hasType (IDs::playlist))
     {
@@ -238,8 +289,28 @@ void MainProcessor::valueTreeChildRemoved (juce::ValueTree& parent, juce::ValueT
         return;
     }
 
+    if (parent.hasType (IDs::playlistTrack))
+    {
+        if (child.hasType (IDs::note))
+            postMelodyNoteChange (parent, child, false);  // nota apagada (ou desfeita)
+        else
+            pushArrangementState();
+        return;
+    }
+
     if (parent == projectState.getTree() || parent.hasType (IDs::sequencer))
         pushFullState();
+}
+
+void MainProcessor::postMelodyNoteChange (const juce::ValueTree& trackNode, const juce::ValueTree& noteNode, bool on)
+{
+    const int slot = trackNode.getParent().indexOf (trackNode);
+
+    if (slot >= 0 && slot < kMaxPlaylistTracks)
+        post (EngineEvent::setMelodyNote (slot,
+                                          static_cast<int> (noteNode.getProperty (IDs::noteStep, 0)),
+                                          static_cast<int> (noteNode.getProperty (IDs::notePitch, 60)),
+                                          on));
 }
 
 void MainProcessor::valueTreeRedirected (juce::ValueTree&)
@@ -304,7 +375,12 @@ void MainProcessor::drainEvents() noexcept
                     samplesToNextStep = 0.0;
                     swingTriggerCountdown = -1;
                     swingTriggerStep = -1;
+                    arrangementBar = 0;
+                    hasScheduledSinceStop = false;
                     playheadStep.store (-1, std::memory_order_relaxed);
+                    playheadBar.store (0, std::memory_order_relaxed);
+                    currentBar.store (0, std::memory_order_relaxed);   // Stop = volta ao início da Playlist
+                    releaseMelodyVoices();
                 }
                 else if (event.a == 1)
                 {
@@ -316,6 +392,7 @@ void MainProcessor::drainEvents() noexcept
                     swingTriggerCountdown = -1;
                     swingTriggerStep = -1;
                     playheadStep.store (-1, std::memory_order_relaxed);
+                    releaseMelodyVoices();
                 }
                 break;
             }
@@ -333,6 +410,22 @@ void MainProcessor::drainEvents() noexcept
                     velocities[static_cast<std::size_t> (event.a)][static_cast<std::size_t> (event.b)]
                         = static_cast<std::uint8_t> (event.c);
                 }
+                break;
+
+            case EngineEvent::Type::SetDrumBars:
+                drumBarMask = event.a & ((1 << kPlaylistBars) - 1);
+                break;
+
+            case EngineEvent::Type::SetMelodyNote:
+                melodySequencer.setNote (event.a, event.b, event.c & 0xFF, (event.c & 0x100) != 0);
+                break;
+
+            case EngineEvent::Type::SetMelodyClear:
+                melodySequencer.clearNotes (event.a);
+                break;
+
+            case EngineEvent::Type::SetSlotBars:
+                melodySequencer.setBars (event.a, event.b);
                 break;
 
             case EngineEvent::Type::SetTrackType:
@@ -427,6 +520,65 @@ int MainProcessor::getSwingOffsetSamples (int step) const noexcept
                          static_cast<int> (std::round (maximumOffset * amount)));
 }
 
+void MainProcessor::triggerStepInBar (int step, int bar, int sampleOffset, juce::MidiBuffer& midi) noexcept
+{
+    // Melodia primeiro: as notas do passo anterior terminam e as deste começam,
+    // independentemente de a Bateria estar audível neste compasso.
+    releaseMelodyVoices();
+    triggerMelodyStep (step, bar);
+
+    // Fora de um clipe de Bateria o passo é pulado (nem voz, nem nota MIDI).
+    if (! clip::isBarAudible (drumBarMask, bar))
+        return;
+
+    triggerStep (step);
+
+    for (int track = 0; track < kNumTracks; ++track)
+    {
+        if (((masks[static_cast<std::size_t> (track)] >> step) & 1) != 0)
+            midi.addEvent (juce::MidiMessage::noteOn (10, 36 + track, 1.0f), sampleOffset);
+    }
+}
+
+void MainProcessor::releaseMelodyVoices() noexcept
+{
+    for (auto& voice : melodyVoices)
+        voice.release();
+}
+
+void MainProcessor::triggerMelodyStep (int step, int bar) noexcept
+{
+    for (int slot = 0; slot < kMaxPlaylistTracks; ++slot)
+    {
+        if (slotTypes[static_cast<std::size_t> (slot)] != static_cast<int> (TrackType::Melody)
+            || ! melodySequencer.isAudible (slot, bar))
+            continue;
+
+        melodySequencer.forEachNote (slot, step, [this, slot] (int pitch) noexcept
+        {
+            // Voz livre; sem nenhuma, rouba em rodízio (sem alocar).
+            MelodyVoice* target = nullptr;
+            for (auto& voice : melodyVoices)
+            {
+                if (voice.note < 0)
+                {
+                    target = &voice;
+                    break;
+                }
+            }
+
+            if (target == nullptr)
+            {
+                target = &melodyVoices[melodyStealIndex];
+                melodyStealIndex = (melodyStealIndex + 1) % melodyVoices.size();
+            }
+
+            target->slot = slot;
+            target->start (pitch, 0.8f);
+        });
+    }
+}
+
 void MainProcessor::triggerStep (int step) noexcept
 {
     for (std::size_t track = 0; track < static_cast<std::size_t> (kNumTracks); ++track)
@@ -486,16 +638,7 @@ void MainProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBu
 
             if (swingTriggerCountdown <= 0)
             {
-                triggerStep (swingTriggerStep);
-
-                for (int track = 0; track < kNumTracks; ++track)
-                {
-                    if (((masks[static_cast<std::size_t> (track)] >> swingTriggerStep) & 1) != 0)
-                    {
-                        const auto note = juce::MidiMessage::noteOn (10, 36 + track, 1.0f);
-                        midi.addEvent (note, i);
-                    }
-                }
+                triggerStepInBar (swingTriggerStep, swingTriggerBar, i, midi);
 
                 swingTriggerCountdown = -1;
                 swingTriggerStep = -1;
@@ -527,25 +670,24 @@ void MainProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBu
                     }
                 }
 
+                // Compasso (0-based, com loop) do passo que está sendo agendado: o primeiro
+                // passo 0 depois do Stop é o compasso 0; cada passo 0 seguinte avança um.
+                if (scheduledStep == 0 && hasScheduledSinceStop)
+                    arrangementBar = clip::nextBar (arrangementBar);
+                hasScheduledSinceStop = true;
+
                 if (swingOffset > 0)
                 {
                     swingTriggerStep = scheduledStep;
+                    swingTriggerBar = arrangementBar;
                     swingTriggerCountdown = swingOffset;
                 }
                 else
                 {
-                    triggerStep (scheduledStep);
-
-                    for (int track = 0; track < kNumTracks; ++track)
-                    {
-                        if (((masks[static_cast<std::size_t> (track)] >> scheduledStep) & 1) != 0)
-                        {
-                            const auto note = juce::MidiMessage::noteOn (10, 36 + track, 1.0f);
-                            midi.addEvent (note, i);
-                        }
-                    }
+                    triggerStepInBar (scheduledStep, arrangementBar, i, midi);
                 }
 
+                playheadBar.store (arrangementBar, std::memory_order_relaxed);
                 playheadStep.store (scheduledStep, std::memory_order_relaxed);
                 if (scheduledStep == 0 && playheadSampleIndex > 0)
                     currentBar.fetch_add (1, std::memory_order_relaxed);
@@ -617,7 +759,15 @@ void MainProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBu
 
         previewGainSmoothed += (previewBusGain - previewGainSmoothed) * kGainSmoothing;
 
-        const float mix = std::clamp ((drumMix * drumGainSmoothed + previewMix * previewGainSmoothed) * kMasterGain,
+        // Melodia: cada voz usa o fader (suavizado) da PRÓPRIA faixa.
+        for (std::size_t slot = 0; slot < slotGainSmoothed.size(); ++slot)
+            slotGainSmoothed[slot] += (slotGains[slot] - slotGainSmoothed[slot]) * kGainSmoothing;
+
+        float melodyMix = 0.0f;
+        for (auto& voice : melodyVoices)
+            melodyMix += voice.process (sampleRate) * slotGainSmoothed[static_cast<std::size_t> (voice.slot)];
+
+        const float mix = std::clamp ((drumMix * drumGainSmoothed + previewMix * previewGainSmoothed + melodyMix) * kMasterGain,
                                       -1.0f, 1.0f);
 
         for (int ch = 0; ch < numChannels; ++ch)

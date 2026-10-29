@@ -32,20 +32,28 @@ public:
     void mouseUp (const juce::MouseEvent& event) override;
     void mouseWheelMove (const juce::MouseEvent& event, const juce::MouseWheelDetails& wheel) override;
 
+    /** Faixa de Melodia editada (-1 = nenhuma: a grade fica vazia e não aceita cliques).
+     *  Recarrega as notas do ProjectState; nunca guarda ponteiro para o modelo. */
+    void setTrackId (int newTrackId);
+
     /** Nome da nota com oitava; MIDI 60 = "C4". */
     [[nodiscard]] static juce::String noteName (int midiNote);
 
 private:
-    static constexpr int kLowestNote  = 24;    // C1
-    static constexpr int kHighestNote = 107;   // B7
+    static constexpr int kLowestNote  = kMelodyLowestNote;    // C1
+    static constexpr int kHighestNote = kMelodyHighestNote;   // B7
     static constexpr int numRows  = kHighestNote - kLowestNote + 1;
-    static constexpr int numSteps = 16;
+    static constexpr int numSteps = kMelodySteps;
     static constexpr int kRowHeight = 24;
 
     /** Nota MIDI sob o ponto (ou -1 se fora da grade/da escala). `row`/`step` são -1 fora da grade. */
     [[nodiscard]] int noteAt (const juce::Point<int>& position, int* row = nullptr, int* step = nullptr) const;
     int toggleNote (const juce::Point<int>& position);
     void clampScroll();
+    /** Relê as notas da faixa (cache da UI) a partir do ProjectState. */
+    void reloadNotes();
+    /** Liga/desliga a nota no domínio; devolve true se a mudança foi aceita. */
+    bool commitNote (int row, int step, bool on);
     void scrollToNote (int midiNote);
 
     void valueTreePropertyChanged (juce::ValueTree&, const juce::Identifier&) override;
@@ -54,7 +62,8 @@ private:
 
     ProjectState& state;
     MainProcessor& processor;
-    std::array<std::array<bool, numSteps>, numRows> notes {};   // linha 0 = nota mais aguda
+    int trackId { -1 };
+    std::array<std::array<bool, numSteps>, numRows> notes {};   // cache; linha 0 = nota mais aguda
     float scrollY { 0.0f };                                       // deslocamento vertical em pixels
     bool initialScrollDone { false };
     int previewNote { -1 };
