@@ -83,6 +83,12 @@ void TrackRowComponent::refreshFromState()
     const double gain = static_cast<double> (track->getGain());
     if (fader.getValue() != gain)
         fader.setValue (gain, juce::dontSendNotification);
+
+    // Não recarrega no meio de um arrasto: a pré-visualização manda até o mouseUp.
+    if (dragMode == DragMode::None)
+        clips = state.getClips (trackId);
+
+    repaint();
 }
 
 void TrackRowComponent::paint (juce::Graphics& g)
@@ -99,13 +105,32 @@ void TrackRowComponent::paint (juce::Graphics& g)
     g.setColour (accent);
     g.fillRect (header.withWidth (kGrid));
 
-    // Lane (clipes entram nas próximas fatias): grade de compassos.
+    // Lane: grade de compassos (largura proporcional) + clipes.
     g.setColour (col (kBgDeep));
     g.fillRect (bounds.withTrimmedLeft (kHeaderWidth));
 
+    const float bw = barWidth();
     g.setColour (col (kBorderSubtle));
-    for (int x = kHeaderWidth + kBarWidth; x < bounds.getRight(); x += kBarWidth)
-        g.drawVerticalLine (x, 0.0f, static_cast<float> (bounds.getHeight()));
+    for (int bar = 1; bar < kPlaylistBars; ++bar)
+        g.drawVerticalLine (kHeaderWidth + juce::roundToInt (bar * bw), 0.0f, static_cast<float> (bounds.getHeight()));
+
+    g.setFont (makeFont (13.0f, true));
+    for (const auto& c : clips)
+    {
+        const bool isDragged = dragMode != DragMode::None && c.id == dragOriginal.id;
+        const auto rect = clipBounds (isDragged ? dragPreview : c);
+
+        g.setColour (accent.withAlpha (isDragged ? 1.0f : 0.85f));
+        g.fillRoundedRectangle (rect, 4.0f);
+
+        // Alça de redimensionar (plana, sem sombra).
+        g.setColour (col (kBgDeep).withAlpha (0.35f));
+        g.fillRect (rect.withLeft (rect.getRight() - 4.0f).reduced (0.0f, 8.0f));
+
+        g.setColour (col (kBgDeep));
+        g.drawText (nameLabel.getText(), rect.reduced (8.0f, 0.0f).withTrimmedRight (6.0f),
+                    juce::Justification::centredLeft, true);
+    }
 
     g.setColour (col (kBorderSubtle));
     g.drawHorizontalLine (bounds.getBottom() - 1, 0.0f, static_cast<float> (bounds.getRight()));
@@ -131,6 +156,135 @@ void TrackRowComponent::resized()
     actionButton.setBounds (bottom.removeFromRight (128));
     bottom.removeFromRight (kGrid);
     fader.setBounds (bottom);
+}
+
+// ---------------------------------------------------------------------------
+// Clipes: geometria e interação (lane = à direita do cabeçalho)
+// ---------------------------------------------------------------------------
+juce::Rectangle<float> TrackRowComponent::clipBounds (const ClipData& c) const noexcept
+{
+    const float bw = barWidth();
+    return { static_cast<float> (kHeaderWidth) + static_cast<float> (c.startBar) * bw + 1.0f, 8.0f,
+             static_cast<float> (c.lengthBars) * bw - 2.0f, static_cast<float> (getHeight()) - 17.0f };
+}
+
+int TrackRowComponent::clipIndexAtX (int x) const noexcept
+{
+    if (x < kHeaderWidth)
+        return -1;
+
+    for (std::size_t i = 0; i < clips.size(); ++i)
+    {
+        const auto rect = clipBounds (clips[i]);
+        if (static_cast<float> (x) >= rect.getX() && static_cast<float> (x) < rect.getRight())
+            return static_cast<int> (i);
+    }
+
+    return -1;
+}
+
+void TrackRowComponent::mouseMove (const juce::MouseEvent& event)
+{
+    const int index = clipIndexAtX (event.x);
+    const bool onHandle = index >= 0
+                       && static_cast<float> (event.x) >= clipBounds (clips[static_cast<std::size_t> (index)]).getRight()
+                                                          - static_cast<float> (kResizeHandle);
+
+    setMouseCursor (onHandle ? juce::MouseCursor::LeftRightResizeCursor
+                             : (index >= 0 ? juce::MouseCursor::DraggingHandCursor
+                                           : juce::MouseCursor::NormalCursor));
+}
+
+void TrackRowComponent::mouseDown (const juce::MouseEvent& event)
+{
+    dragMode = DragMode::None;
+
+    const int index = clipIndexAtX (event.x);
+    if (index < 0)
+        return;
+
+    const auto hit = clips[static_cast<std::size_t> (index)];
+
+    if (event.mods.isPopupMenu())
+    {
+        showClipMenu (hit.id);
+        return;
+    }
+
+    if (! event.mods.isLeftButtonDown())
+        return;
+
+    dragOriginal = dragPreview = hit;
+    dragMode = static_cast<float> (event.x) >= clipBounds (hit).getRight() - static_cast<float> (kResizeHandle)
+                   ? DragMode::ResizeRight
+                   : DragMode::Move;
+}
+
+void TrackRowComponent::mouseDrag (const juce::MouseEvent& event)
+{
+    if (dragMode == DragMode::None)
+        return;
+
+    const int deltaBars = juce::roundToInt (static_cast<float> (event.getDistanceFromDragStartX()) / barWidth());
+    ClipData candidate = dragOriginal;
+
+    if (dragMode == DragMode::Move)
+    {
+        candidate.startBar = clip::clampStart (dragOriginal.startBar + deltaBars, dragOriginal.lengthBars);
+    }
+    else
+    {
+        candidate.lengthBars = juce::jlimit (kMinClipBars, kPlaylistBars - dragOriginal.startBar,
+                                             dragOriginal.lengthBars + deltaBars);
+    }
+
+    // O domínio decide se a posição é válida; se não for, a pré-visualização fica onde estava.
+    if (state.canPlaceClip (trackId, candidate.startBar, candidate.lengthBars, dragOriginal.id)
+        && (candidate.startBar != dragPreview.startBar || candidate.lengthBars != dragPreview.lengthBars))
+    {
+        dragPreview = candidate;
+        repaint();
+    }
+}
+
+void TrackRowComponent::mouseUp (const juce::MouseEvent&)
+{
+    if (dragMode == DragMode::None)
+        return;
+
+    dragMode = DragMode::None;   // antes de gravar: o refresh disparado pela árvore já recarrega os clipes
+
+    if (dragPreview.startBar != dragOriginal.startBar || dragPreview.lengthBars != dragOriginal.lengthBars)
+        state.setClipRange (trackId, dragOriginal.id, dragPreview.startBar, dragPreview.lengthBars);
+
+    clips = state.getClips (trackId);
+    repaint();
+}
+
+void TrackRowComponent::mouseDoubleClick (const juce::MouseEvent& event)
+{
+    if (event.x < kHeaderWidth || clipIndexAtX (event.x) >= 0)
+        return;
+
+    const int bar = juce::jlimit (0, kPlaylistBars - 1,
+                                  static_cast<int> (static_cast<float> (event.x - kHeaderWidth) / barWidth()));
+    const int room = state.getMaxClipLengthAt (trackId, bar);
+
+    if (room >= kMinClipBars)
+        state.addClip (trackId, bar, juce::jmin (kDefaultClipBars, room));
+}
+
+void TrackRowComponent::showClipMenu (int clipId)
+{
+    juce::PopupMenu menu;
+    menu.addItem (1, theme::txt ("Remover clipe"));
+
+    juce::Component::SafePointer<TrackRowComponent> safeThis (this);
+    menu.showMenuAsync (juce::PopupMenu::Options(), [safeThis, clipId] (int result)
+    {
+        if (safeThis != nullptr && result == 1)
+            safeThis->state.removeClip (safeThis->trackId, clipId);
+    });
 }
 
 } // namespace mf

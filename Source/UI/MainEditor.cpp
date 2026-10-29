@@ -46,6 +46,8 @@ MainEditor::MainEditor (MainProcessor& processorToEdit)
     {
         engine.requestStop();
         state.setPlaying (false);
+        lastPlayheadBars = 0.0f;
+        playlist.setPlayheadBars (0.0f);
     };
     addAndMakeVisible (stopButton);
 
@@ -254,7 +256,17 @@ void MainEditor::valueTreeRedirected (juce::ValueTree&)                         
 
 void MainEditor::timerCallback()
 {
-    stepGrid.setPlayheadStep (engine.getPlayheadStep());
+    const int step = engine.getPlayheadStep();
+    stepGrid.setPlayheadStep (step);
+
+    // Playhead global: compasso (atomic escrito pela audio thread) + fração do passo.
+    // Pausado (step < 0) mantém a última posição; só o Stop volta ao início.
+    if (step >= 0)
+    {
+        const int bar = engine.getCurrentBar() % kPlaylistBars;
+        lastPlayheadBars = static_cast<float> (bar) + static_cast<float> (step) / static_cast<float> (kNumSteps);
+        playlist.setPlayheadBars (lastPlayheadBars);
+    }
 }
 
 bool MainEditor::keyPressed (const juce::KeyPress& key, juce::Component*)

@@ -34,6 +34,10 @@ public:
     /** Botão de ação de alguma faixa foi acionado: (ação do domínio, trackId). */
     std::function<void (TrackAction, int)> onTrackAction;
 
+    /** Posição do playhead em compassos, 0 <= bars < kPlaylistBars (fracionária). Barato:
+     *  só repinta o overlay quando o pixel muda. Chamado pela message thread (timer da UI). */
+    void setPlayheadBars (float bars);
+
     void paint (juce::Graphics&) override;
     void resized() override;
 
@@ -47,6 +51,21 @@ private:
     void valueTreeChildRemoved (juce::ValueTree&, juce::ValueTree&, int) override;
     void valueTreeRedirected (juce::ValueTree&) override;
 
+    /** Linha fina e transparente ao mouse por cima da régua + lanes. */
+    class PlayheadOverlay final : public juce::Component
+    {
+    public:
+        PlayheadOverlay() { setInterceptsMouseClicks (false, false); }
+        void setLineX (int newX);
+        void paint (juce::Graphics&) override;
+    private:
+        int lineX { -1 };
+    };
+
+    [[nodiscard]] int laneRowWidth() const;      // largura das linhas (== régua)
+    void updatePlayheadX();
+    void refreshRowForTrackNode (const juce::ValueTree& trackNode);
+
     void rebuildRows();
     void layoutRows();
     void showAddTrackMenu();
@@ -56,6 +75,8 @@ private:
     juce::Viewport viewport;
     juce::Component rowsHolder;
     juce::OwnedArray<TrackRowComponent> rows;
+    PlayheadOverlay playheadOverlay;
+    float playheadBars { 0.0f };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PlaylistComponent)
 };

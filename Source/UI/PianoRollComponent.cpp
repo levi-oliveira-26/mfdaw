@@ -34,8 +34,8 @@ bool isBlackKey (int midiNote) noexcept
 } // namespace
 
 // ---------------------------------------------------------------------------
-PianoRollComponent::PianoRollComponent (ProjectState& projectState, MainProcessor& processor)
-    : state (projectState), processor (processor)
+PianoRollComponent::PianoRollComponent (ProjectState& projectState, MainProcessor& processorToUse)
+    : state (projectState), processor (processorToUse)
 {
     state.getTree().addListener (this);
 }

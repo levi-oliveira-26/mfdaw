@@ -305,6 +305,7 @@ void MainProcessor::drainEvents() noexcept
                     swingTriggerCountdown = -1;
                     swingTriggerStep = -1;
                     playheadStep.store (-1, std::memory_order_relaxed);
+                    currentBar.store (0, std::memory_order_relaxed);   // Stop = volta ao início da Playlist
                 }
                 else if (event.a == 1)
                 {

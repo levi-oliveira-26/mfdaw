@@ -18,6 +18,7 @@ PlaylistComponent::PlaylistComponent (ProjectState& stateToUse)
     viewport.setScrollBarsShown (true, false);
     viewport.setScrollBarThickness (12);
     addAndMakeVisible (viewport);
+    addAndMakeVisible (playheadOverlay);   // por último: fica acima de régua e lanes
 
     state.getTree().addListener (this);
     rebuildRows();
@@ -56,14 +57,16 @@ void PlaylistComponent::paint (juce::Graphics& g)
     g.drawText ("Faixas", ruler.withWidth (TrackRowComponent::kHeaderWidth).reduced (kPad, 0),
                 juce::Justification::centredLeft, false);
 
-    int bar = 1;
-    for (int x = TrackRowComponent::kHeaderWidth; x < ruler.getRight(); x += TrackRowComponent::kBarWidth, ++bar)
+    const float bw = TrackRowComponent::barWidthFor (laneRowWidth());
+    for (int bar = 0; bar < kPlaylistBars; ++bar)
     {
+        const int x = TrackRowComponent::kHeaderWidth + juce::roundToInt (static_cast<float> (bar) * bw);
+
         g.setColour (col (kBorderSubtle));
         g.drawVerticalLine (x, static_cast<float> (ruler.getY()), static_cast<float> (ruler.getBottom()));
 
         g.setColour (col (kTextMuted));
-        g.drawText (juce::String (bar),
+        g.drawText (juce::String (bar + 1),
                     juce::Rectangle<int> (x + kGrid, ruler.getY(), 48, ruler.getHeight()),
                     juce::Justification::centredLeft, false);
     }
@@ -95,8 +98,51 @@ void PlaylistComponent::resized()
 
     area.removeFromTop (kRulerHeight);
     viewport.setBounds (area);
+    playheadOverlay.setBounds (getLocalBounds().withTrimmedTop (kToolbarHeight));
 
     layoutRows();
+    updatePlayheadX();
+}
+
+int PlaylistComponent::laneRowWidth() const
+{
+    return juce::jmax (1, viewport.getMaximumVisibleWidth());
+}
+
+void PlaylistComponent::PlayheadOverlay::setLineX (int newX)
+{
+    if (newX == lineX)
+        return;
+
+    repaint (juce::Rectangle<int> (lineX - 6, 0, 12, getHeight()));   // apaga a posição antiga
+    lineX = newX;
+    repaint (juce::Rectangle<int> (lineX - 6, 0, 12, getHeight()));
+}
+
+void PlaylistComponent::PlayheadOverlay::paint (juce::Graphics& g)
+{
+    if (lineX < TrackRowComponent::kHeaderWidth)
+        return;
+
+    g.setColour (theme::col (theme::kTextPrimary));
+    g.fillRect (lineX - 1, 0, 2, getHeight());
+
+    juce::Path marker;   // triângulo plano na régua
+    marker.addTriangle (static_cast<float> (lineX - 6), 0.0f, static_cast<float> (lineX + 6), 0.0f,
+                        static_cast<float> (lineX), 9.0f);
+    g.fillPath (marker);
+}
+
+void PlaylistComponent::updatePlayheadX()
+{
+    const float bw = TrackRowComponent::barWidthFor (laneRowWidth());
+    playheadOverlay.setLineX (TrackRowComponent::kHeaderWidth + juce::roundToInt (playheadBars * bw));
+}
+
+void PlaylistComponent::setPlayheadBars (float bars)
+{
+    playheadBars = juce::jlimit (0.0f, static_cast<float> (kPlaylistBars), bars);
+    updatePlayheadX();
 }
 
 void PlaylistComponent::layoutRows()
@@ -111,12 +157,10 @@ void PlaylistComponent::layoutRows()
 // ===========================================================================
 // Reatividade (message thread)
 // ===========================================================================
-void PlaylistComponent::valueTreePropertyChanged (juce::ValueTree& changedTree, const juce::Identifier&)
+void PlaylistComponent::refreshRowForTrackNode (const juce::ValueTree& trackNode)
 {
-    if (! changedTree.hasType (IDs::playlistTrack))
-        return;
+    const int id = static_cast<int> (trackNode.getProperty (IDs::trackId, -1));
 
-    const int id = static_cast<int> (changedTree.getProperty (IDs::trackId, -1));
     for (auto* row : rows)
     {
         if (row->getTrackId() == id)
@@ -127,17 +171,29 @@ void PlaylistComponent::valueTreePropertyChanged (juce::ValueTree& changedTree, 
     }
 }
 
+void PlaylistComponent::valueTreePropertyChanged (juce::ValueTree& changedTree, const juce::Identifier&)
+{
+    if (changedTree.hasType (IDs::playlistTrack))
+        refreshRowForTrackNode (changedTree);
+    else if (changedTree.hasType (IDs::clip))
+        refreshRowForTrackNode (changedTree.getParent());   // mover / redimensionar (inclui undo)
+}
+
 void PlaylistComponent::valueTreeChildAdded (juce::ValueTree& parent, juce::ValueTree& child)
 {
     // Também cobre carregar projeto: a raiz troca o nó PLAYLIST inteiro.
     if (parent.hasType (IDs::playlist) || child.hasType (IDs::playlist))
         triggerAsyncUpdate();
+    else if (parent.hasType (IDs::playlistTrack) && child.hasType (IDs::clip))
+        refreshRowForTrackNode (parent);
 }
 
 void PlaylistComponent::valueTreeChildRemoved (juce::ValueTree& parent, juce::ValueTree& child, int)
 {
     if (parent.hasType (IDs::playlist) || child.hasType (IDs::playlist))
         triggerAsyncUpdate();
+    else if (parent.hasType (IDs::playlistTrack) && child.hasType (IDs::clip))
+        refreshRowForTrackNode (parent);
 }
 
 void PlaylistComponent::valueTreeRedirected (juce::ValueTree&)

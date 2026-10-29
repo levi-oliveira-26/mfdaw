@@ -3,8 +3,10 @@
 #include <atomic>
 #include <array>
 #include <memory>
+#include <vector>
 #include <juce_data_structures/juce_data_structures.h>
 
+#include "Core/ClipModel.h"
 #include "Core/TrackModel.h"
 #include "Core/TrackType.h"
 
@@ -57,6 +59,12 @@ namespace IDs
     inline const juce::Identifier trackType     { "trackType" };     // ver enum TrackType
     inline const juce::Identifier gain          { "gain" };          // posição do fader pré-mix 0..1
     inline const juce::Identifier nextTrackId   { "nextTrackId" };   // contador monotônico (nó PLAYLIST)
+
+    // --- Clipes da Playlist (filhos de PLAYLIST_TRACK); startBar é compartilhado ---
+    inline const juce::Identifier clip          { "CLIP" };
+    inline const juce::Identifier clipId        { "clipId" };        // único na Playlist, nunca reutilizado
+    inline const juce::Identifier lengthBars    { "lengthBars" };
+    inline const juce::Identifier nextClipId    { "nextClipId" };    // contador monotônico (nó PLAYLIST)
 
     // --- Voz / clips de audio ---
     inline const juce::Identifier voiceTracks { "VOICE_TRACKS" };
@@ -148,6 +156,23 @@ public:
     [[nodiscard]] std::unique_ptr<TrackModel> getTrackByIndex (int index);
     [[nodiscard]] std::unique_ptr<TrackModel> getTrackById (int trackId);
 
+    // --- Clipes (Slice 02) ---
+    // Intervalos de compassos inteiros, sem sobreposição dentro da faixa. Cada
+    // operação pública é UMA transação de undo. Falhas devolvem -1/false e não
+    // alteram o estado.
+    /** `true` se [startBar, startBar+lengthBars) cabe no projeto e não colide com outro
+     *  clipe da faixa (ignorando `ignoreClipId`, usado ao mover/redimensionar). */
+    [[nodiscard]] bool canPlaceClip (int trackId, int startBar, int lengthBars, int ignoreClipId = -1) const;
+    /** Cria um clipe; devolve o clipId ou -1. */
+    int addClip (int trackId, int startBar, int lengthBars);
+    bool removeClip (int trackId, int clipId);
+    /** Move e/ou redimensiona de uma só vez (um único passo de undo). */
+    bool setClipRange (int trackId, int clipId, int startBar, int lengthBars);
+    /** Clipes da faixa em ordem crescente de início (vazio se a faixa não existe). */
+    [[nodiscard]] std::vector<ClipData> getClips (int trackId) const;
+    /** Maior comprimento que um clipe iniciado em `startBar` pode ter (0 = posição ocupada/inválida). */
+    [[nodiscard]] int getMaxClipLengthAt (int trackId, int startBar, int ignoreClipId = -1) const;
+
     // --- Voz / Audio Clips (Card 4.1) ---
     void addAudioClip (const AudioClipModel& clip);
     [[nodiscard]] int getNumAudioClips() const;
@@ -191,6 +216,12 @@ private:
 
     /** Próximo trackId (monotônico: um id removido nunca é reaproveitado). */
     int allocateTrackId();
+
+    /** Próximo clipId (monotônico, único em toda a Playlist). */
+    int allocateClipId();
+
+    /** Nó PLAYLIST_TRACK do id (inválido se não existir). */
+    [[nodiscard]] juce::ValueTree findTrackNode (int trackId) const;
 
     juce::ValueTree tree;
     juce::ValueTree session;
