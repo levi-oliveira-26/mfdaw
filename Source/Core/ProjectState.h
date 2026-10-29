@@ -2,7 +2,11 @@
 
 #include <atomic>
 #include <array>
+#include <memory>
 #include <juce_data_structures/juce_data_structures.h>
+
+#include "Core/TrackModel.h"
+#include "Core/TrackType.h"
 
 namespace mf
 {
@@ -45,6 +49,14 @@ namespace IDs
     inline const juce::Identifier notes      { "notes" };
     inline const juce::Identifier track      { "TRACK" };
     inline const juce::Identifier mask       { "mask" };         // bit n = passo n ativo
+
+    // --- Playlist (Arrangement View): lista polimórfica de faixas ---
+    inline const juce::Identifier playlist      { "PLAYLIST" };
+    inline const juce::Identifier playlistTrack { "PLAYLIST_TRACK" };
+    inline const juce::Identifier trackId       { "trackId" };       // id estável (nunca reutilizado)
+    inline const juce::Identifier trackType     { "trackType" };     // ver enum TrackType
+    inline const juce::Identifier gain          { "gain" };          // posição do fader pré-mix 0..1
+    inline const juce::Identifier nextTrackId   { "nextTrackId" };   // contador monotônico (nó PLAYLIST)
 
     // --- Voz / clips de audio ---
     inline const juce::Identifier voiceTracks { "VOICE_TRACKS" };
@@ -125,12 +137,25 @@ public:
     [[nodiscard]] int  getStepVelocity (int track, int step) const;
     void               setStepVelocity (int track, int step, int velocity);
 
+    // --- Playlist / Arrangement View (Pivot, Vertical Slice 01) ---
+    // O projeto nasce VAZIO: 0 faixas. Cada faixa é um nó PLAYLIST_TRACK; os
+    // objetos TrackModel devolvidos são visões descartáveis sobre esses nós.
+    /** Acrescenta uma faixa ao final. Devolve o trackId, ou -1 se a playlist estiver cheia. */
+    int addTrack (TrackType type);
+    bool removeTrack (int trackId);
+    [[nodiscard]] int getNumTracks() const;
+    [[nodiscard]] int indexOfTrack (int trackId) const;
+    [[nodiscard]] std::unique_ptr<TrackModel> getTrackByIndex (int index);
+    [[nodiscard]] std::unique_ptr<TrackModel> getTrackById (int trackId);
+
     // --- Voz / Audio Clips (Card 4.1) ---
     void addAudioClip (const AudioClipModel& clip);
     [[nodiscard]] int getNumAudioClips() const;
     [[nodiscard]] AudioClipModel getAudioClip (int index) const;
 
     // --- Sessão (transitória) ---
+    // LEGADO (pré-pivot): currentStep/freeMode pertenciam ao Wizard de abas
+    // estáticas. Nenhuma UI nova os utiliza; remover na próxima fatia.
     [[nodiscard]] int  getCurrentStep() const;     // 1..5
     void               setCurrentStep (int step);
     [[nodiscard]] bool isFreeMode() const;
@@ -160,6 +185,12 @@ private:
 
     /** Garante propriedades/pistas padrão (projeto novo ou arquivo incompleto). */
     void ensureStructure();
+
+    /** Remove nós inválidos/excedentes e garante ids únicos, nome e fader. */
+    void sanitizePlaylist();
+
+    /** Próximo trackId (monotônico: um id removido nunca é reaproveitado). */
+    int allocateTrackId();
 
     juce::ValueTree tree;
     juce::ValueTree session;

@@ -41,6 +41,7 @@ private:
     [[nodiscard]] juce::Rectangle<float> getCellBounds (int track, int step) const;
 
     static constexpr float kLabelWidth = 96.0f;
+    static constexpr int kSwingKnobSize = 44;
 
     ProjectState& state;
     SampleManager& sampleManager;

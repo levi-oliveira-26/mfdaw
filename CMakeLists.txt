@@ -54,12 +54,15 @@ target_sources(MFDaw PRIVATE
     Source/Core/ChordGenerator.cpp
     Source/Core/ScaleLock.cpp
     Source/Core/ProjectState.cpp
+    Source/Core/TrackModel.cpp
     Source/Engine/AudioRecorder.cpp
     Source/Engine/MainProcessor.cpp
     Source/UI/StepGridComponent.cpp
     Source/UI/SmartChordsComponent.cpp
     Source/UI/PianoRollComponent.cpp
     Source/UI/VoiceRecorderComponentView.cpp
+    Source/UI/TrackRowComponent.cpp
+    Source/UI/PlaylistComponent.cpp
     Source/UI/MainEditor.cpp)
 
 target_include_directories(MFDaw PRIVATE Source)
@@ -79,15 +82,19 @@ add_executable(MFDawTests
     Source/Tests/HarmonyTests.cpp
     Source/Tests/ScaleLockTests.cpp
     Source/Tests/AudioRecorderTests.cpp
+    Source/Tests/PlaylistTests.cpp
     Source/Core/ChordGenerator.cpp
     Source/Core/ScaleLock.cpp
     Source/Core/ProjectState.cpp
+    Source/Core/TrackModel.cpp
     Source/Engine/AudioRecorder.cpp
     Source/Engine/MainProcessor.cpp
     Source/UI/StepGridComponent.cpp
     Source/UI/SmartChordsComponent.cpp
     Source/UI/PianoRollComponent.cpp
     Source/UI/VoiceRecorderComponentView.cpp
+    Source/UI/TrackRowComponent.cpp
+    Source/UI/PlaylistComponent.cpp
     Source/UI/MainEditor.cpp)
 
 target_include_directories(MFDawTests PRIVATE Source)
