@@ -16,6 +16,10 @@ public:
     explicit SmartChordsComponent (ProjectState& projectState, MainProcessor& processor);
     ~SmartChordsComponent() override;
 
+    /** Faixa de Harmonia editada (-1 = nenhuma: os cartões ficam apagados e não podem ser ligados).
+     *  Guarda só o id; o estado "ligado" é relido do ProjectState. */
+    void setTrackId (int newTrackId);
+
     void paint (juce::Graphics& g) override;
     void resized() override;
     void mouseDown (const juce::MouseEvent&) override;
@@ -25,6 +29,8 @@ public:
 
 private:
     void refreshChords();
+    /** Relê quais cartões estão ligados na faixa e atualiza as cores. */
+    void refreshArmed();
     void valueTreePropertyChanged (juce::ValueTree&, const juce::Identifier&) override;
     void valueTreeChildAdded (juce::ValueTree&, juce::ValueTree&) override;
     void valueTreeChildRemoved (juce::ValueTree&, juce::ValueTree&, int) override;
@@ -33,6 +39,8 @@ private:
     MainProcessor& processor;
     std::array<juce::Label, 4> chordLabels;
     int pressedChord { -1 };
+    int trackId { -1 };
+    int armedMask { 0 };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SmartChordsComponent)
 };

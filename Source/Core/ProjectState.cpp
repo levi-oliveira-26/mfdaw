@@ -299,6 +299,23 @@ void ProjectState::sanitizePlaylist()
             ++c;
         }
     }
+
+    // 5) Máscara de cartões da Harmonia: só em faixas de Harmonia e dentro dos 4 bits.
+    for (int t = 0; t < playlist.getNumChildren(); ++t)
+    {
+        auto trackNode = playlist.getChild (t);
+        if (! trackNode.hasProperty (IDs::chordMask))
+            continue;
+
+        if (static_cast<int> (trackNode.getProperty (IDs::trackType, -1)) != static_cast<int> (TrackType::Harmony))
+            trackNode.removeProperty (IDs::chordMask, nullptr);
+        else
+        {
+            const int raw = static_cast<int> (trackNode.getProperty (IDs::chordMask, kHarmonyAllCardsMask));
+            if ((raw & kHarmonyAllCardsMask) != raw)
+                trackNode.setProperty (IDs::chordMask, raw & kHarmonyAllCardsMask, nullptr);
+        }
+    }
 }
 
 int ProjectState::allocateTrackId()
@@ -544,6 +561,40 @@ int ProjectState::getTrackBarMask (int trackId) const
         mask |= clip::barMaskFor (c.startBar, c.lengthBars);
 
     return mask;
+}
+
+// ---------------------------------------------------------------------------
+// Harmonia por faixa (Vertical Slice 05)
+// ---------------------------------------------------------------------------
+int ProjectState::getHarmonyArmedMask (int trackId) const
+{
+    const auto trackNode = findTrackNode (trackId);
+
+    if (! trackNode.isValid()
+        || static_cast<int> (trackNode.getProperty (IDs::trackType, -1)) != static_cast<int> (TrackType::Harmony))
+        return 0;
+
+    return static_cast<int> (trackNode.getProperty (IDs::chordMask, kHarmonyAllCardsMask)) & kHarmonyAllCardsMask;
+}
+
+bool ProjectState::setHarmonyCardArmed (int trackId, int card, bool armed)
+{
+    auto trackNode = findTrackNode (trackId);
+
+    if (! trackNode.isValid() || ! harmony::isValidCard (card)
+        || static_cast<int> (trackNode.getProperty (IDs::trackType, -1)) != static_cast<int> (TrackType::Harmony))
+        return false;
+
+    const int current = getHarmonyArmedMask (trackId);
+    const int updated = armed ? (current | (1 << card)) : (current & ~(1 << card));
+
+    if (updated != current)
+    {
+        undoManager.beginNewTransaction();
+        trackNode.setProperty (IDs::chordMask, updated, &undoManager);
+    }
+
+    return true;
 }
 
 // ---------------------------------------------------------------------------

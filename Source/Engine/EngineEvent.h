@@ -2,6 +2,8 @@
 
 #include <cstdint>
 
+#include "Core/HarmonyChord.h"
+
 namespace mf
 {
 /**
@@ -22,6 +24,7 @@ namespace mf
  *  SetMelodyNote : a = slot, b = passo (0..15), c = altura MIDI | (ligada ? 0x100 : 0)
  *  SetMelodyClear: a = slot (esvazia só as NOTAS do slot; os compassos vão por SetSlotBars)
  *  SetSlotBars   : a = slot, b = máscara de compassos cobertos pelos clipes da faixa; 0 = rascunho
+ *  SetHarmonyChord: a = slot, b = cartão (0..3) | (ligado ? 0x100 : 0), c = 3 notas MIDI empacotadas (harmony::packNotes)
  *
  * "Slot" é o índice da faixa na Playlist (0..kMaxPlaylistTracks-1).
  */
@@ -29,7 +32,7 @@ struct EngineEvent
 {
     enum class Type : std::uint8_t { SetBpm, SetPlaying, SetTrackMask, SetStepVelocity, ChordNote,
                                      SetTrackType, SetTrackGain, SetDrumBars,
-                                     SetMelodyNote, SetMelodyClear, SetSlotBars };
+                                     SetMelodyNote, SetMelodyClear, SetSlotBars, SetHarmonyChord };
 
     Type type { Type::SetBpm };
     std::int32_t a { 0 };
@@ -72,6 +75,11 @@ struct EngineEvent
     [[nodiscard]] static EngineEvent setMelodyClear (int slot) noexcept
     {
         return { Type::SetMelodyClear, slot, 0, 0 };
+    }
+
+    [[nodiscard]] static EngineEvent setHarmonyChord (int slot, int card, bool armed, int n0, int n1, int n2) noexcept
+    {
+        return { Type::SetHarmonyChord, slot, card | (armed ? 0x100 : 0), harmony::packNotes (n0, n1, n2) };
     }
 
     [[nodiscard]] static EngineEvent setSlotBars (int slot, int barMask) noexcept

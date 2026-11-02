@@ -234,6 +234,7 @@ void MainEditor::updateDetailPanel()
     closeDetailButton.setVisible (detailOpen);
     stepGrid.setVisible (detailOpen && detailAction == TrackAction::OpenStepSequencer);
     smartChords.setVisible (detailOpen && detailAction == TrackAction::OpenSmartChords);
+    smartChords.setTrackId (detailOpen && detailAction == TrackAction::OpenSmartChords ? detailTrackId : -1);
     pianoRoll.setVisible (detailOpen && detailAction == TrackAction::OpenPianoRoll);
     pianoRoll.setTrackId (detailOpen && detailAction == TrackAction::OpenPianoRoll ? detailTrackId : -1);
     voiceRecorder.setVisible (detailOpen && detailAction == TrackAction::ToggleRecording);

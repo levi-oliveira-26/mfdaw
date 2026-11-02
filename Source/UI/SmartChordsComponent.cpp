@@ -29,16 +29,44 @@ SmartChordsComponent::~SmartChordsComponent()
 
 void SmartChordsComponent::paint (juce::Graphics& g)
 {
-    g.fillAll (theme::col (theme::kSurfaceBase));
+    using namespace theme;
 
-    g.setColour (theme::col (theme::kTextPrimary));
-    g.setFont (theme::makeFont (22.0f, true));
-    g.drawText ("Smart Chords", getLocalBounds().removeFromTop (48),
+    g.fillAll (col (kSurfaceBase));
+
+    g.setColour (col (kTextPrimary));
+    g.setFont (makeFont (22.0f, true));
+    g.drawText (txt ("Smart Chords · Harmonia"), getLocalBounds().removeFromTop (48),
                 juce::Justification::centredLeft);
 
-    g.setColour (theme::col (theme::kBrandHarmony));
-    for (const auto& label : chordLabels)
-        g.fillRoundedRectangle (label.getBounds().toFloat(), 8.0f);
+    // Cartão ligado = preenchido (soa); desligado = só contorno (silêncio naquele compasso).
+    for (size_t i = 0; i < chordLabels.size(); ++i)
+    {
+        const auto bounds = chordLabels[i].getBounds().toFloat();
+        const bool armed = ((armedMask >> i) & 1) != 0;
+
+        g.setColour (col (kBrandHarmony).withAlpha (pressedChord == static_cast<int> (i) ? 1.0f : (armed ? 0.85f : 0.0f)));
+        g.fillRoundedRectangle (bounds, 8.0f);
+
+        if (! armed)
+        {
+            g.setColour (col (kBrandHarmony));
+            g.drawRoundedRectangle (bounds.reduced (1.0f), 8.0f, 2.0f);
+        }
+
+        g.setColour (col (kTextMuted));
+        g.setFont (makeFont (13.0f));
+        g.drawText (txt ("Compasso ") + juce::String (static_cast<int> (i) + 1) + txt (" (e a cada 4)"),
+                    juce::Rectangle<int> (chordLabels[i].getX(), chordLabels[i].getBottom() + kGrid,
+                                          chordLabels[i].getWidth(), 20),
+                    juce::Justification::centred, true);
+    }
+
+    g.setColour (col (kTextMuted));
+    g.setFont (makeFont (14.0f));
+    g.drawFittedText (trackId < 0 ? txt ("Abra uma faixa de Harmonia para editar a progressão.")
+                                  : txt ("Toque num cartão para ouvir. Duplo clique liga ou desliga o acorde "
+                                         "daquele compasso."),
+                      getLocalBounds().reduced (kPad).removeFromBottom (44), juce::Justification::centredLeft, 2);
 }
 
 void SmartChordsComponent::resized()
@@ -55,6 +83,27 @@ void SmartChordsComponent::resized()
         label.setBounds (cards.removeFromLeft (cardWidth));
         cards.removeFromLeft (gap);
     }
+}
+
+void SmartChordsComponent::setTrackId (int newTrackId)
+{
+    if (newTrackId == trackId)
+        return;
+
+    trackId = newTrackId;
+    refreshArmed();
+}
+
+void SmartChordsComponent::refreshArmed()
+{
+    armedMask = trackId >= 0 ? state.getHarmonyArmedMask (trackId) : 0;
+
+    for (size_t i = 0; i < chordLabels.size(); ++i)
+        chordLabels[i].setColour (juce::Label::textColourId,
+                                  ((armedMask >> i) & 1) != 0 ? theme::col (theme::kBgDeep)
+                                                              : theme::col (theme::kBrandHarmony));
+
+    repaint();
 }
 
 void SmartChordsComponent::refreshChords()
@@ -119,13 +168,15 @@ void SmartChordsComponent::mouseDrag (const juce::MouseEvent& event)
 
 void SmartChordsComponent::mouseDoubleClick (const juce::MouseEvent& event)
 {
+    if (trackId < 0)
+        return;
+
     for (size_t i = 0; i < chordLabels.size(); ++i)
     {
         if (chordLabels[i].getBounds().contains (event.getPosition()))
         {
-            const auto notes = ChordGenerator::generateNotes (state.getKeyRoot(), state.getScale(),
-                                                               static_cast<int> (i));
-            state.setHarmonyChord (static_cast<int> (i), notes);
+            const bool armed = ((armedMask >> i) & 1) != 0;
+            state.setHarmonyCardArmed (trackId, static_cast<int> (i), ! armed);   // o listener atualiza a tela
             break;
         }
     }
@@ -135,8 +186,20 @@ void SmartChordsComponent::valueTreePropertyChanged (juce::ValueTree&, const juc
 {
     if (property == IDs::keyRoot || property == IDs::scale)
         refreshChords();
+    else if (property == IDs::chordMask)
+        refreshArmed();   // inclui undo/redo
 }
 
-void SmartChordsComponent::valueTreeChildAdded (juce::ValueTree&, juce::ValueTree&) {}
-void SmartChordsComponent::valueTreeChildRemoved (juce::ValueTree&, juce::ValueTree&, int) {}
+// Estrutura da Playlist trocada (carregar projeto, remover a faixa aberta): relê o estado.
+void SmartChordsComponent::valueTreeChildAdded (juce::ValueTree& parent, juce::ValueTree& child)
+{
+    if (parent.hasType (IDs::playlist) || child.hasType (IDs::playlist))
+        refreshArmed();
+}
+
+void SmartChordsComponent::valueTreeChildRemoved (juce::ValueTree& parent, juce::ValueTree& child, int)
+{
+    if (parent.hasType (IDs::playlist) || child.hasType (IDs::playlist))
+        refreshArmed();
+}
 } // namespace mf

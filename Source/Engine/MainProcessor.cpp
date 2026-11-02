@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
+#include "Core/ChordGenerator.h"
 #include "Core/FaderScale.h"
 #include "UI/MainEditor.h"
 
@@ -152,9 +153,34 @@ void MainProcessor::pushArrangementState()
     for (int slot = 0; slot < kMaxPlaylistTracks; ++slot)
     {
         const auto track = slot < numTracks ? projectState.getTrackByIndex (slot) : nullptr;
-        const bool isMelody = track != nullptr && track->getType() == TrackType::Melody;
-        post (EngineEvent::setSlotBars (slot, isMelody ? projectState.getTrackBarMask (track->getId()) : 0));
+        const bool hasPattern = track != nullptr
+                                && (track->getType() == TrackType::Melody || track->getType() == TrackType::Harmony);
+        post (EngineEvent::setSlotBars (slot, hasPattern ? projectState.getTrackBarMask (track->getId()) : 0));
     }
+}
+
+void MainProcessor::pushHarmonySlot (int slot)
+{
+    if (slot < 0 || slot >= kMaxPlaylistTracks)
+        return;
+
+    const auto track = slot < projectState.getNumTracks() ? projectState.getTrackByIndex (slot) : nullptr;
+    const bool isHarmony = track != nullptr && track->getType() == TrackType::Harmony;
+    const int armedMask = isHarmony ? projectState.getHarmonyArmedMask (track->getId()) : 0;
+
+    for (int card = 0; card < kHarmonyCards; ++card)
+    {
+        // Os acordes derivam da tonalidade ATUAL do projeto (mudar o tom transpõe a progressão).
+        const auto notes = ChordGenerator::generateNotes (projectState.getKeyRoot(), projectState.getScale(), card);
+        post (EngineEvent::setHarmonyChord (slot, card, isHarmony && ((armedMask >> card) & 1) != 0,
+                                            notes[0], notes[1], notes[2]));
+    }
+}
+
+void MainProcessor::pushHarmonyState()
+{
+    for (int slot = 0; slot < kMaxPlaylistTracks; ++slot)
+        pushHarmonySlot (slot);
 }
 
 void MainProcessor::pushMelodyState()
@@ -191,6 +217,7 @@ void MainProcessor::pushPlaylistState()
     }
 
     pushMelodyState();        // slots mudam de lugar: notas de Melodia acompanham
+    pushHarmonyState();       // ... e os cartões de Harmonia
     pushArrangementState();   // remover/carregar faixa muda os clipes (bateria e melodia)
 }
 
@@ -200,6 +227,8 @@ void MainProcessor::valueTreePropertyChanged (juce::ValueTree& changedTree, cons
     {
         if (property == IDs::bpm)
             post (EngineEvent::setBpm (projectState.getBpm()));
+        else if (property == IDs::keyRoot || property == IDs::scale)
+            pushHarmonyState();   // os acordes são derivados do tom
     }
     else if (changedTree == projectState.getSession())
     {
@@ -235,6 +264,8 @@ void MainProcessor::valueTreePropertyChanged (juce::ValueTree& changedTree, cons
                                                                                 static_cast<double> (fader::kDefaultPosition)));
             post (EngineEvent::setTrackGain (slot, fader::gainToPermille (fader::toGain (position))));
         }
+        else if (property == IDs::chordMask)
+            pushHarmonySlot (slot);   // cartão ligado/desligado (inclui undo/redo)
     }
     else if (changedTree.hasType (IDs::clip))
     {
@@ -381,6 +412,7 @@ void MainProcessor::drainEvents() noexcept
                     playheadBar.store (0, std::memory_order_relaxed);
                     currentBar.store (0, std::memory_order_relaxed);   // Stop = volta ao início da Playlist
                     releaseMelodyVoices();
+                    releaseHarmonyVoices();
                 }
                 else if (event.a == 1)
                 {
@@ -393,6 +425,7 @@ void MainProcessor::drainEvents() noexcept
                     swingTriggerStep = -1;
                     playheadStep.store (-1, std::memory_order_relaxed);
                     releaseMelodyVoices();
+                    releaseHarmonyVoices();
                 }
                 break;
             }
@@ -426,6 +459,13 @@ void MainProcessor::drainEvents() noexcept
 
             case EngineEvent::Type::SetSlotBars:
                 melodySequencer.setBars (event.a, event.b);
+                harmonySequencer.setBars (event.a, event.b);
+                break;
+
+            case EngineEvent::Type::SetHarmonyChord:
+                harmonySequencer.setChord (event.a, event.b & 0xFF, (event.b & 0x100) != 0,
+                                           harmony::unpackNote (event.c, 0), harmony::unpackNote (event.c, 1),
+                                           harmony::unpackNote (event.c, 2));
                 break;
 
             case EngineEvent::Type::SetTrackType:
@@ -527,6 +567,12 @@ void MainProcessor::triggerStepInBar (int step, int bar, int sampleOffset, juce:
     releaseMelodyVoices();
     triggerMelodyStep (step, bar);
 
+    if (step == 0)   // o acorde dura o compasso inteiro: troca só no primeiro passo
+    {
+        releaseHarmonyVoices();
+        triggerHarmonyBar (bar);
+    }
+
     // Fora de um clipe de Bateria o passo é pulado (nem voz, nem nota MIDI).
     if (! clip::isBarAudible (drumBarMask, bar))
         return;
@@ -556,25 +602,31 @@ void MainProcessor::triggerMelodyStep (int step, int bar) noexcept
 
         melodySequencer.forEachNote (slot, step, [this, slot] (int pitch) noexcept
         {
-            // Voz livre; sem nenhuma, rouba em rodízio (sem alocar).
-            MelodyVoice* target = nullptr;
-            for (auto& voice : melodyVoices)
-            {
-                if (voice.note < 0)
-                {
-                    target = &voice;
-                    break;
-                }
-            }
-
-            if (target == nullptr)
-            {
-                target = &melodyVoices[melodyStealIndex];
-                melodyStealIndex = (melodyStealIndex + 1) % melodyVoices.size();
-            }
-
+            auto* target = &allocateVoice (melodyVoices, melodyStealIndex);
             target->slot = slot;
             target->start (pitch, 0.8f);
+        });
+    }
+}
+
+void MainProcessor::releaseHarmonyVoices() noexcept
+{
+    for (auto& voice : harmonyVoices)
+        voice.release();
+}
+
+void MainProcessor::triggerHarmonyBar (int bar) noexcept
+{
+    for (int slot = 0; slot < kMaxPlaylistTracks; ++slot)
+    {
+        if (slotTypes[static_cast<std::size_t> (slot)] != static_cast<int> (TrackType::Harmony))
+            continue;
+
+        harmonySequencer.forEachNoteInBar (slot, bar, [this, slot] (int pitch) noexcept
+        {
+            auto& voice = allocateVoice (harmonyVoices, harmonyStealIndex);
+            voice.slot = slot;
+            voice.start (pitch, 0.6f);
         });
     }
 }
@@ -767,7 +819,12 @@ void MainProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBu
         for (auto& voice : melodyVoices)
             melodyMix += voice.process (sampleRate) * slotGainSmoothed[static_cast<std::size_t> (voice.slot)];
 
-        const float mix = std::clamp ((drumMix * drumGainSmoothed + previewMix * previewGainSmoothed + melodyMix) * kMasterGain,
+        float harmonyMix = 0.0f;
+        for (auto& voice : harmonyVoices)
+            harmonyMix += voice.process (sampleRate) * slotGainSmoothed[static_cast<std::size_t> (voice.slot)];
+
+        const float mix = std::clamp ((drumMix * drumGainSmoothed + previewMix * previewGainSmoothed
+                                       + melodyMix + harmonyMix) * kMasterGain,
                                       -1.0f, 1.0f);
 
         for (int ch = 0; ch < numChannels; ++ch)
