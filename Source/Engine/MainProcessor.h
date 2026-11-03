@@ -36,7 +36,8 @@ namespace mf
  *    - Publica a posição do playhead para a UI por um std::atomic<int>.
  */
 class MainProcessor final : public juce::AudioProcessor,
-                            private juce::ValueTree::Listener
+                            private juce::ValueTree::Listener,
+                            private juce::AsyncUpdater
 {
 public:
     MainProcessor();
@@ -115,7 +116,10 @@ private:
     void pushHarmonySlot (int slot);
     /** Carrega (se mudou) o take ativo de cada faixa de Voz e o publica para a audio thread. */
     void syncTakes();
-    /** WAV -> buffer mono em float (message thread). nullptr se ilegível ou longo demais. */
+    void handleAsyncUpdate() override;
+    void finishTakeLoad (int slot, int takeIndex, int generation, const juce::String& path,
+                         std::shared_ptr<TakeBuffer> buffer);
+    /** WAV -> buffer mono em float (thread de carregamento). nullptr se ilegível ou longo demais. */
     [[nodiscard]] static std::shared_ptr<TakeBuffer> loadTakeBuffer (const juce::String& path);
     /** Uma nota de Melodia entrou/saiu da árvore: envia só essa mudança ao slot da faixa. */
     void postMelodyNoteChange (const juce::ValueTree& trackNode, const juce::ValueTree& noteNode, bool on);
@@ -226,7 +230,12 @@ private:
     TakePlayer takePlayer;
     std::array<std::array<std::shared_ptr<TakeBuffer>, kMaxTakesPerTrack>, kMaxPlaylistTracks> takeBuffers {}; // message thread
     std::array<std::array<juce::String, kMaxTakesPerTrack>, kMaxPlaylistTracks> takePaths {}; // message thread
+    std::array<std::array<int, kMaxTakesPerTrack>, kMaxPlaylistTracks> takeLoadGeneration {}; // message thread
     std::vector<std::shared_ptr<TakeBuffer>> takeGraveyard; // message thread
+    struct TakeLoadResult { int slot; int takeIndex; int generation; juce::String path; std::shared_ptr<TakeBuffer> buffer; };
+    juce::ThreadPool takeLoaderPool { 1 };
+    juce::CriticalSection takeLoadLock;
+    std::vector<TakeLoadResult> completedTakeLoads; // protegido por takeLoadLock
 
     std::array<float, kMaxPlaylistTracks> slotGainSmoothed {};   // ganho suavizado por slot (preenchido no ctor)
 
