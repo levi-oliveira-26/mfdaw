@@ -20,6 +20,7 @@ struct ClipData
     int id         { -1 };
     int startBar   { 0 };
     int lengthBars { 0 };
+    int takeId { -1 }; // vínculo opcional a um TAKE, usado somente por faixas de Voz
 
     [[nodiscard]] constexpr bool isValid() const noexcept { return id > 0; }
     [[nodiscard]] constexpr int  endBar() const noexcept  { return startBar + lengthBars; }

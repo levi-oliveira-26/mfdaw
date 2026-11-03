@@ -16,6 +16,7 @@ public:
         runMathTests();
         runDomainTests();
         runPersistenceTests();
+        runClipTakeLinkTests();
     }
 
 private:
@@ -148,6 +149,68 @@ private:
             for (int i = 0; i < kMaxTakesPerTrack; ++i)
                 expect (state.addRecordedTake (voice, "x" + juce::String (i) + ".wav", 0, 0.5) > 0);
             expectEquals (state.addRecordedTake (voice, "over.wav", 0, 0.5), -1);
+        }
+    }
+
+    void runClipTakeLinkTests()
+    {
+        beginTest ("Recorded clips retain their take identity and new voice clips use active take");
+        {
+            ProjectState state;
+            const int voice = state.addTrack (TrackType::Record);
+            const int t1 = state.addRecordedTake (voice, "one.wav", 0, 1.0);
+            const int t2 = state.addRecordedTake (voice, "two.wav", 32, 1.0);
+            auto clips = state.getClips (voice);
+            expectEquals (static_cast<int> (clips.size()), 2);
+            expectEquals (clips[0].takeId, t1);
+            expectEquals (clips[1].takeId, t2);
+            expect (state.setActiveTake (voice, t1));
+            const int added = state.addClip (voice, 4, 1);
+            expect (added > 0);
+            clips = state.getClips (voice);
+            for (const auto& c : clips)
+                if (c.id == added) expectEquals (c.takeId, t1);
+            const int emptyVoice = state.addTrack (TrackType::Record);
+            expectEquals (state.addClip (emptyVoice, 0, 1), -1);
+        }
+
+        beginTest ("Removing a take removes linked clips in one undo transaction");
+        {
+            ProjectState state;
+            const int voice = state.addTrack (TrackType::Record);
+            const int t1 = state.addRecordedTake (voice, "one.wav", 0, 1.0);
+            const int t2 = state.addRecordedTake (voice, "two.wav", 32, 1.0);
+            expect (state.removeTake (voice, t1));
+            expectEquals (static_cast<int> (state.getTakes (voice).size()), 1);
+            expectEquals (static_cast<int> (state.getClips (voice).size()), 1);
+            state.getUndoManager().undo();
+            expectEquals (static_cast<int> (state.getTakes (voice).size()), 2);
+            expectEquals (static_cast<int> (state.getClips (voice).size()), 2);
+            expectEquals (state.getClips (voice)[0].takeId, t1);
+            state.getUndoManager().redo();
+            expectEquals (static_cast<int> (state.getTakes (voice).size()), 1);
+            expectEquals (state.getClips (voice)[0].takeId, t2);
+        }
+
+        beginTest ("Slice 06 clips migrate to active take and orphan references are cleared");
+        {
+            ProjectState source;
+            const int voice = source.addTrack (TrackType::Record);
+            const int takeId = source.addRecordedTake (voice, "one.wav", 0, 1.0);
+            auto playlist = source.getTree().getChildWithName (IDs::playlist);
+            auto voiceNode = playlist.getChild (source.indexOfTrack (voice));
+            voiceNode.getChildWithName (IDs::clip).removeProperty (IDs::takeId, nullptr);
+
+            ProjectState loaded;
+            expect (loaded.loadFromJsonString (source.createJsonString()));
+            expectEquals (loaded.getClips (voice)[0].takeId, takeId);
+
+            auto loadedPlaylist = loaded.getTree().getChildWithName (IDs::playlist);
+            auto loadedVoice = loadedPlaylist.getChild (loaded.indexOfTrack (voice));
+            loadedVoice.getChildWithName (IDs::clip).setProperty (IDs::takeId, 99999, nullptr);
+            ProjectState sanitized;
+            expect (sanitized.loadFromJsonString (loaded.createJsonString()));
+            expectEquals (sanitized.getClips (voice)[0].takeId, -1);
         }
     }
 
