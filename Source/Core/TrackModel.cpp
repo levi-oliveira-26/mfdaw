@@ -5,6 +5,13 @@
 
 namespace mf
 {
+TrackModel::TrackModel (juce::ValueTree nodeToWrap, juce::UndoManager* undo)
+    : node (std::move (nodeToWrap)),
+      undoManager (undo)
+{
+    volumeLevel.store (fader::toGain (getGain()), std::memory_order_relaxed);
+}
+
 std::unique_ptr<TrackModel> TrackModel::create (const juce::ValueTree& node, juce::UndoManager* undoManager)
 {
     if (! node.isValid() || node.getType() != IDs::playlistTrack)
@@ -63,7 +70,9 @@ float TrackModel::getGain() const
 
 void TrackModel::setGain (float faderPosition)
 {
-    node.setProperty (IDs::gain, static_cast<double> (fader::clampPosition (faderPosition)), undoManager);
+    faderPosition = fader::clampPosition (faderPosition);
+    volumeLevel.store (fader::toGain (faderPosition), std::memory_order_relaxed);
+    node.setProperty (IDs::gain, static_cast<double> (faderPosition), undoManager);
 }
 
 } // namespace mf

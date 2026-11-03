@@ -196,7 +196,7 @@ private:
     // Gravação/Amostra recebem DSP próprio nas próximas fatias.
     static constexpr float kGainSmoothing = 0.002f;
     std::array<int, kMaxPlaylistTracks> slotTypes {};    // -1 = slot vazio (preenchido no ctor)
-    std::array<float, kMaxPlaylistTracks> slotGains {};  // ganho linear (preenchido no ctor)
+    std::array<std::atomic<float>, kMaxPlaylistTracks> slotGains {};  // ganho linear lock-free
     float drumBusGain { 1.0f };
     float previewBusGain { 1.0f };
     float drumGainSmoothed { 1.0f };

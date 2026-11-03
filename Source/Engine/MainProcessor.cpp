@@ -55,7 +55,8 @@ MainProcessor::MainProcessor()
 
     // Slots da Playlist: vazios, ganho unitário (antes de qualquer áudio rodar).
     slotTypes.fill (-1);
-    slotGains.fill (1.0f);
+    for (auto& gain : slotGains)
+        gain.store (1.0f, std::memory_order_relaxed);
     slotGainSmoothed.fill (1.0f);
 
     recomputeTiming();
@@ -715,7 +716,8 @@ void MainProcessor::drainEvents() noexcept
             case EngineEvent::Type::SetTrackGain:
                 if (event.a >= 0 && event.a < kMaxPlaylistTracks)
                 {
-                    slotGains[static_cast<std::size_t> (event.a)] = fader::permilleToGain (event.b);
+                    slotGains[static_cast<std::size_t> (event.a)].store (
+                        fader::permilleToGain (event.b), std::memory_order_relaxed);
                     recomputeBusGains();
                 }
                 break;
@@ -764,13 +766,13 @@ void MainProcessor::recomputeBusGains() noexcept
         switch (slotTypes[slot])
         {
             case static_cast<int> (TrackType::Drum):
-                if (! hasDrum) { drum = slotGains[slot]; hasDrum = true; }
+                if (! hasDrum) { drum = slotGains[slot].load (std::memory_order_relaxed); hasDrum = true; }
                 break;
             case static_cast<int> (TrackType::Harmony):
-                if (! hasHarmony) { harmony = slotGains[slot]; hasHarmony = true; }
+                if (! hasHarmony) { harmony = slotGains[slot].load (std::memory_order_relaxed); hasHarmony = true; }
                 break;
             case static_cast<int> (TrackType::Melody):
-                if (! hasMelody) { melody = slotGains[slot]; hasMelody = true; }
+                if (! hasMelody) { melody = slotGains[slot].load (std::memory_order_relaxed); hasMelody = true; }
                 break;
             default:
                 break;
@@ -1053,7 +1055,10 @@ void MainProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBu
 
         // Melodia: cada voz usa o fader (suavizado) da PRÓPRIA faixa.
         for (std::size_t slot = 0; slot < slotGainSmoothed.size(); ++slot)
-            slotGainSmoothed[slot] += (slotGains[slot] - slotGainSmoothed[slot]) * kGainSmoothing;
+        {
+            const float targetGain = slotGains[slot].load (std::memory_order_relaxed);
+            slotGainSmoothed[slot] += (targetGain - slotGainSmoothed[slot]) * kGainSmoothing;
+        }
 
         float melodyMix = 0.0f;
         for (auto& voice : melodyVoices)

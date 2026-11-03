@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <memory>
 #include <juce_data_structures/juce_data_structures.h>
 
@@ -50,16 +51,20 @@ public:
     /** Posição do fader pré-mix (0..1). Ver Core/FaderScale.h. */
     [[nodiscard]] float getGain() const;
     void setGain (float faderPosition);
+    [[nodiscard]] float getVolumeLevel() const noexcept
+    {
+        return volumeLevel.load (std::memory_order_relaxed);
+    }
 
     [[nodiscard]] const juce::ValueTree& getNode() const noexcept { return node; }
 
 protected:
-    TrackModel (juce::ValueTree nodeToWrap, juce::UndoManager* undo)
-        : node (std::move (nodeToWrap)), undoManager (undo) {}
+    TrackModel (juce::ValueTree nodeToWrap, juce::UndoManager* undo);
 
 private:
     juce::ValueTree node;
     juce::UndoManager* undoManager;
+    std::atomic<float> volumeLevel { 1.0f };
 };
 
 // ---------------------------------------------------------------------------
