@@ -55,6 +55,23 @@ void VoiceRecorderComponentView::setTrackId (int newTrackId)
     repaint();
 }
 
+void VoiceRecorderComponentView::setSelectedClip (int newTrackId, int clipId)
+{
+    selectedClipTrackId = newTrackId;
+    selectedClipId = clipId;
+    selectedClipTakeId = -1;
+
+    if (selectedClipTrackId >= 0 && selectedClipId >= 0)
+        for (const auto& clip : state.getClips (selectedClipTrackId))
+            if (clip.id == selectedClipId)
+            {
+                selectedClipTakeId = clip.takeId;
+                break;
+            }
+
+    repaint();
+}
+
 int VoiceRecorderComponentView::takeRowAt (juce::Point<int> position) const
 {
     if (! takesArea.contains (position))
@@ -67,8 +84,14 @@ int VoiceRecorderComponentView::takeRowAt (juce::Point<int> position) const
 void VoiceRecorderComponentView::mouseDown (const juce::MouseEvent& event)
 {
     const int row = takeRowAt (event.getPosition());
-    if (row >= 0 && trackId >= 0)
-        state.setActiveTake (trackId, takes[static_cast<std::size_t> (row)].id);
+    if (row < 0 || trackId < 0 || selectedClipTrackId != trackId || selectedClipId < 0)
+        return;
+
+    // Escolher um take altera o clipe selecionado, não o take ativo global da faixa.
+    if (state.setClipTake (selectedClipTrackId, selectedClipId, takes[static_cast<std::size_t> (row)].id))
+        selectedClipTakeId = takes[static_cast<std::size_t> (row)].id;
+
+    repaint();
 }
 
 void VoiceRecorderComponentView::paint (juce::Graphics& g)
@@ -128,7 +151,10 @@ void VoiceRecorderComponentView::paint (juce::Graphics& g)
         auto list = takesArea;
         g.setColour (col (kTextPrimary));
         g.setFont (makeFont (15.0f, true));
-        g.drawText (takes.empty() ? txt ("Nenhuma gravação ainda — grave sua voz!") : txt ("Suas gravações (toque para escolher)"),
+        g.drawText (takes.empty() ? txt ("Nenhuma gravação ainda — grave sua voz!")
+                                  : (selectedClipTrackId == trackId && selectedClipId >= 0
+                                         ? txt ("Escolha um take para o clipe selecionado")
+                                         : txt ("Selecione um clipe de Voz na Playlist primeiro")),
                     list.removeFromTop (kTakeRowHeight), juce::Justification::centredLeft, false);
 
         const int maxRows = list.getHeight() / kTakeRowHeight;
@@ -136,16 +162,20 @@ void VoiceRecorderComponentView::paint (juce::Graphics& g)
         {
             const auto& t = takes[static_cast<std::size_t> (i)];
             auto row = list.removeFromTop (kTakeRowHeight).reduced (0, 2);
+            const bool selectedForClip = selectedClipTrackId == trackId
+                                       && selectedClipId >= 0 && t.id == selectedClipTakeId;
             const bool active = t.id == activeTakeId;
 
-            g.setColour (active ? juce::Colour (kBrandVoice).withAlpha (0.22f) : col (kSurfaceBase).brighter (0.05f));
+            g.setColour (selectedForClip ? juce::Colour (kBrandVoice).withAlpha (0.22f)
+                                         : col (kSurfaceBase).brighter (0.05f));
             g.fillRoundedRectangle (row.toFloat(), 4.0f);
-            g.setColour (active ? juce::Colour (kBrandVoice) : col (kTextPrimary));
-            g.setFont (makeFont (14.0f, active));
+            g.setColour (selectedForClip ? juce::Colour (kBrandVoice) : col (kTextPrimary));
+            g.setFont (makeFont (14.0f, selectedForClip));
             g.drawText (txt ("Gravação ") + juce::String (static_cast<int> (takes.size()) - i)
                             + "  ·  " + txt ("compasso ") + juce::String (t.startBar() + 1)
                             + "  ·  " + juce::String (t.durationSeconds, 1) + " s"
-                            + (active ? txt ("  ·  em uso") : juce::String()),
+                            + (selectedForClip ? txt ("  ·  no clipe selecionado")
+                                               : (active ? txt ("  ·  ativo na faixa") : juce::String())),
                         row.reduced (10, 0), juce::Justification::centredLeft, false);
         }
     }
@@ -179,6 +209,14 @@ void VoiceRecorderComponentView::timerCallback()
         std::reverse (latest.begin(), latest.end());
         takes = std::move (latest);
         activeTakeId = state.getActiveTakeId (trackId);
+        selectedClipTakeId = -1;
+        if (selectedClipTrackId == trackId && selectedClipId >= 0)
+            for (const auto& clip : state.getClips (trackId))
+                if (clip.id == selectedClipId)
+                {
+                    selectedClipTakeId = clip.takeId;
+                    break;
+                }
     }
     else
     {
