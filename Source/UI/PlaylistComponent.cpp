@@ -193,7 +193,18 @@ void PlaylistComponent::valueTreeChildRemoved (juce::ValueTree& parent, juce::Va
     if (parent.hasType (IDs::playlist) || child.hasType (IDs::playlist))
         triggerAsyncUpdate();
     else if (parent.hasType (IDs::playlistTrack) && child.hasType (IDs::clip))
+    {
+        const int removedTrackId = static_cast<int> (parent.getProperty (IDs::trackId, -1));
+        const int removedClipId = static_cast<int> (child.getProperty (IDs::clipId, -1));
+        if (removedTrackId == selectedClipTrackId && removedClipId == selectedClipId)
+        {
+            selectedClipTrackId = -1;
+            selectedClipId = -1;
+            if (onClipSelected)
+                onClipSelected (-1, -1);
+        }
         refreshRowForTrackNode (parent);
+    }
 }
 
 void PlaylistComponent::valueTreeRedirected (juce::ValueTree&)
