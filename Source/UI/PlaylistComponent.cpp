@@ -225,6 +225,18 @@ void PlaylistComponent::rebuildRows()
                 if (onTrackAction)
                     onTrackAction (action, trackId);
             };
+            row->onClipSelected = [this] (int trackId, int clipId)
+            {
+                selectedClipTrackId = trackId;
+                selectedClipId = clipId;
+
+                for (auto* currentRow : rows)
+                    currentRow->setSelectedClipId (currentRow->getTrackId() == trackId ? clipId : -1);
+
+                if (onClipSelected)
+                    onClipSelected (trackId, clipId);
+            };
+            row->setSelectedClipId (selectedClipTrackId == row->getTrackId() ? selectedClipId : -1);
             rowsHolder.addAndMakeVisible (row);
         }
     }
