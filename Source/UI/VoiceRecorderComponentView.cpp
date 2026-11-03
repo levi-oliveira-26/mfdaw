@@ -1,5 +1,7 @@
 #include "UI/VoiceRecorderComponentView.h"
 
+#include <algorithm>
+
 #include "UI/Theme.h"
 
 namespace mf
@@ -44,6 +46,29 @@ VoiceRecorderComponentView::VoiceRecorderComponentView (MainProcessor& processor
 VoiceRecorderComponentView::~VoiceRecorderComponentView()
 {
     stopTimer();
+}
+
+void VoiceRecorderComponentView::setTrackId (int newTrackId)
+{
+    trackId = newTrackId;
+    engine.setRecordingTarget (trackId);
+    repaint();
+}
+
+int VoiceRecorderComponentView::takeRowAt (juce::Point<int> position) const
+{
+    if (! takesArea.contains (position))
+        return -1;
+
+    const int row = (position.y - takesArea.getY() - kTakeRowHeight) / kTakeRowHeight;   // 1ª linha = título
+    return position.y - takesArea.getY() >= kTakeRowHeight && row >= 0 && row < static_cast<int> (takes.size()) ? row : -1;
+}
+
+void VoiceRecorderComponentView::mouseDown (const juce::MouseEvent& event)
+{
+    const int row = takeRowAt (event.getPosition());
+    if (row >= 0 && trackId >= 0)
+        state.setActiveTake (trackId, takes[static_cast<std::size_t> (row)].id);
 }
 
 void VoiceRecorderComponentView::paint (juce::Graphics& g)
@@ -96,6 +121,34 @@ void VoiceRecorderComponentView::paint (juce::Graphics& g)
             g.fillRect (x, centreY - barHeight, juce::jmax (1.0f, columnWidth - 1.0f), barHeight * 2.0f);
         }
     }
+
+    // Lista de takes (mais recente primeiro); o ativo é o que a faixa usa.
+    if (takesArea.getHeight() >= kTakeRowHeight)
+    {
+        auto list = takesArea;
+        g.setColour (col (kTextPrimary));
+        g.setFont (makeFont (15.0f, true));
+        g.drawText (takes.empty() ? txt ("Nenhuma gravação ainda — grave sua voz!") : txt ("Suas gravações (toque para escolher)"),
+                    list.removeFromTop (kTakeRowHeight), juce::Justification::centredLeft, false);
+
+        const int maxRows = list.getHeight() / kTakeRowHeight;
+        for (int i = 0; i < static_cast<int> (takes.size()) && i < maxRows; ++i)
+        {
+            const auto& t = takes[static_cast<std::size_t> (i)];
+            auto row = list.removeFromTop (kTakeRowHeight).reduced (0, 2);
+            const bool active = t.id == activeTakeId;
+
+            g.setColour (active ? juce::Colour (kBrandVoice).withAlpha (0.22f) : col (kSurfaceBase).brighter (0.05f));
+            g.fillRoundedRectangle (row.toFloat(), 4.0f);
+            g.setColour (active ? juce::Colour (kBrandVoice) : col (kTextPrimary));
+            g.setFont (makeFont (14.0f, active));
+            g.drawText (txt ("Gravação ") + juce::String (static_cast<int> (takes.size()) - i)
+                            + "  ·  " + txt ("compasso ") + juce::String (t.startBar() + 1)
+                            + "  ·  " + juce::String (t.durationSeconds, 1) + " s"
+                            + (active ? txt ("  ·  em uso") : juce::String()),
+                        row.reduced (10, 0), juce::Justification::centredLeft, false);
+        }
+    }
 }
 
 void VoiceRecorderComponentView::resized()
@@ -109,6 +162,8 @@ void VoiceRecorderComponentView::resized()
 
     vuArea = area.removeFromTop (42);
     area.removeFromTop (18);
+    takesArea = area.removeFromBottom (juce::jmin (area.getHeight() / 2, kTakeRowHeight * 6));
+    area.removeFromBottom (12);
     waveformArea = area;
 }
 
@@ -116,6 +171,20 @@ void VoiceRecorderComponentView::timerCallback()
 {
     if (engine.consumeRecordingStart() && ! state.isRecording())
         state.setRecording (true);
+
+    // Takes mudam raramente (ValueTree), mas ler ≤32 nós a 30 Hz é barato e evita listeners extras.
+    if (trackId >= 0)
+    {
+        auto latest = state.getTakes (trackId);
+        std::reverse (latest.begin(), latest.end());
+        takes = std::move (latest);
+        activeTakeId = state.getActiveTakeId (trackId);
+    }
+    else
+    {
+        takes.clear();
+        activeTakeId = -1;
+    }
 
     const float targetLevel = juce::jlimit (0.0f, 1.0f, recorder.getInputLevel() * 4.0f);
     displayedLevel = juce::jmax (targetLevel, displayedLevel * 0.82f);

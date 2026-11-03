@@ -231,7 +231,7 @@ void ProjectState::sanitizePlaylist()
         {
             auto node = trackNode.getChild (c);
 
-            if (node.hasType (IDs::note))   // validadas no passo 4
+            if (node.hasType (IDs::note) || node.hasType (IDs::take))   // validados nos passos 4 e 6
             {
                 ++c;
                 continue;
@@ -316,6 +316,68 @@ void ProjectState::sanitizePlaylist()
                 trackNode.setProperty (IDs::chordMask, raw & kHarmonyAllCardsMask, nullptr);
         }
     }
+
+    // 6) Takes de voz: só em faixas de Voz; arquivo, início e duração válidos; ids únicos; limite por faixa.
+    int highestTakeId = static_cast<int> (playlist.getProperty (IDs::nextTakeId, 1)) - 1;
+    for (int t = 0; t < playlist.getNumChildren(); ++t)
+    {
+        const auto trackNode = playlist.getChild (t);
+        for (int c = 0; c < trackNode.getNumChildren(); ++c)
+            highestTakeId = juce::jmax (highestTakeId,
+                                        static_cast<int> (trackNode.getChild (c).getProperty (IDs::takeId, 0)));
+    }
+
+    juce::Array<int> usedTakeIds;
+    for (int t = 0; t < playlist.getNumChildren(); ++t)
+    {
+        auto trackNode = playlist.getChild (t);
+        const bool isRecord = static_cast<int> (trackNode.getProperty (IDs::trackType, -1))
+                              == static_cast<int> (TrackType::Record);
+        int keptOnTrack = 0;
+        juce::Array<int> keptIds;
+
+        for (int c = 0; c < trackNode.getNumChildren();)
+        {
+            auto node = trackNode.getChild (c);
+            if (! node.hasType (IDs::take))
+            {
+                ++c;
+                continue;
+            }
+
+            const bool valid = isRecord
+                            && node.getProperty (IDs::filePath, "").toString().isNotEmpty()
+                            && take::isValidStartStep (static_cast<int> (node.getProperty (IDs::takeStartStep, -1)))
+                            && take::isValidDuration (static_cast<double> (node.getProperty (IDs::durationSeconds, 0.0)))
+                            && keptOnTrack < kMaxTakesPerTrack;
+
+            if (! valid)
+            {
+                trackNode.removeChild (c, nullptr);
+                continue;
+            }
+
+            int id = static_cast<int> (node.getProperty (IDs::takeId, 0));
+            if (id <= 0 || usedTakeIds.contains (id))
+            {
+                id = ++highestTakeId;
+                node.setProperty (IDs::takeId, id, nullptr);
+            }
+
+            usedTakeIds.add (id);
+            keptIds.add (id);
+            ++keptOnTrack;
+            ++c;
+        }
+
+        // Take ativo que não existe mais (ou faixa que não é de Voz): a propriedade sai.
+        if (trackNode.hasProperty (IDs::activeTake)
+            && ! keptIds.contains (static_cast<int> (trackNode.getProperty (IDs::activeTake, -1))))
+            trackNode.removeProperty (IDs::activeTake, nullptr);
+    }
+
+    if (static_cast<int> (playlist.getProperty (IDs::nextTakeId, 0)) != highestTakeId + 1)
+        playlist.setProperty (IDs::nextTakeId, highestTakeId + 1, nullptr);
 }
 
 int ProjectState::allocateTrackId()
@@ -343,6 +405,22 @@ int ProjectState::allocateClipId()
     }
 
     playlist.setProperty (IDs::nextClipId, next + 1, nullptr);   // contador não é desfeito: ids nunca voltam
+    return next;
+}
+
+int ProjectState::allocateTakeId()
+{
+    auto playlist = tree.getChildWithName (IDs::playlist);
+    int next = static_cast<int> (playlist.getProperty (IDs::nextTakeId, 1));
+
+    for (int t = 0; t < playlist.getNumChildren(); ++t)
+    {
+        const auto trackNode = playlist.getChild (t);
+        for (int c = 0; c < trackNode.getNumChildren(); ++c)
+            next = juce::jmax (next, static_cast<int> (trackNode.getChild (c).getProperty (IDs::takeId, 0)) + 1);
+    }
+
+    playlist.setProperty (IDs::nextTakeId, next + 1, nullptr);   // contador não é desfeito: ids nunca voltam
     return next;
 }
 
@@ -561,6 +639,146 @@ int ProjectState::getTrackBarMask (int trackId) const
         mask |= clip::barMaskFor (c.startBar, c.lengthBars);
 
     return mask;
+}
+
+// ---------------------------------------------------------------------------
+// Takes de voz (Vertical Slice 06)
+// ---------------------------------------------------------------------------
+namespace
+{
+bool isRecordTrackNode (const juce::ValueTree& trackNode)
+{
+    return trackNode.isValid()
+           && static_cast<int> (trackNode.getProperty (IDs::trackType, -1)) == static_cast<int> (TrackType::Record);
+}
+
+TakeData readTake (const juce::ValueTree& node)
+{
+    return { static_cast<int> (node.getProperty (IDs::takeId, -1)),
+             node.getProperty (IDs::filePath, "").toString(),
+             static_cast<int> (node.getProperty (IDs::takeStartStep, 0)),
+             static_cast<double> (node.getProperty (IDs::durationSeconds, 0.0)) };
+}
+} // namespace
+
+int ProjectState::addRecordedTake (int trackId, const juce::String& filePath, int startStep, double durationSeconds)
+{
+    auto trackNode = findTrackNode (trackId);
+
+    if (! isRecordTrackNode (trackNode) || filePath.trim().isEmpty()
+        || ! take::isValidStartStep (startStep) || ! take::isValidDuration (durationSeconds)
+        || static_cast<int> (getTakes (trackId).size()) >= kMaxTakesPerTrack)
+        return -1;
+
+    const int id = allocateTakeId();
+
+    juce::ValueTree node (IDs::take);
+    node.setProperty (IDs::takeId, id, nullptr);
+    node.setProperty (IDs::filePath, filePath, nullptr);
+    node.setProperty (IDs::takeStartStep, startStep, nullptr);
+    node.setProperty (IDs::durationSeconds, durationSeconds, nullptr);
+
+    // Clipe que cobre o take, cortado para caber (nunca invade outro clipe; se o compasso
+    // inicial já está ocupado não há clipe, mas o take fica salvo).
+    const int startBar = take::startBarOf (startStep);
+    const int clipBars = juce::jmin (take::barsCovered (startStep, durationSeconds, getBpm()),
+                                     getMaxClipLengthAt (trackId, startBar));
+
+    undoManager.beginNewTransaction();   // take + ativo + clipe = UM passo de undo
+    trackNode.appendChild (node, &undoManager);
+    trackNode.setProperty (IDs::activeTake, id, &undoManager);
+
+    if (clipBars >= kMinClipBars)
+    {
+        juce::ValueTree clipNode (IDs::clip);
+        clipNode.setProperty (IDs::clipId, allocateClipId(), nullptr);
+        clipNode.setProperty (IDs::startBar, startBar, nullptr);
+        clipNode.setProperty (IDs::lengthBars, clipBars, nullptr);
+        trackNode.appendChild (clipNode, &undoManager);
+    }
+
+    return id;
+}
+
+std::vector<TakeData> ProjectState::getTakes (int trackId) const
+{
+    std::vector<TakeData> result;
+    const auto trackNode = findTrackNode (trackId);
+
+    for (int c = 0; c < trackNode.getNumChildren(); ++c)
+        if (trackNode.getChild (c).hasType (IDs::take))
+            result.push_back (readTake (trackNode.getChild (c)));
+
+    return result;   // a ordem dos filhos é a ordem de gravação
+}
+
+int ProjectState::getActiveTakeId (int trackId) const
+{
+    const auto takes = getTakes (trackId);
+    if (takes.empty())
+        return -1;
+
+    const int wanted = static_cast<int> (findTrackNode (trackId).getProperty (IDs::activeTake, -1));
+    for (const auto& t : takes)
+        if (t.id == wanted)
+            return wanted;
+
+    return takes.back().id;   // sem ativo válido: o mais recente
+}
+
+bool ProjectState::setActiveTake (int trackId, int takeId)
+{
+    auto trackNode = findTrackNode (trackId);
+    if (! isRecordTrackNode (trackNode))
+        return false;
+
+    for (const auto& t : getTakes (trackId))
+    {
+        if (t.id != takeId)
+            continue;
+
+        if (static_cast<int> (trackNode.getProperty (IDs::activeTake, -1)) != takeId)
+        {
+            undoManager.beginNewTransaction();
+            trackNode.setProperty (IDs::activeTake, takeId, &undoManager);
+        }
+
+        return true;
+    }
+
+    return false;
+}
+
+bool ProjectState::removeTake (int trackId, int takeId)
+{
+    auto trackNode = findTrackNode (trackId);
+    if (! isRecordTrackNode (trackNode))
+        return false;
+
+    for (int c = 0; c < trackNode.getNumChildren(); ++c)
+    {
+        const auto node = trackNode.getChild (c);
+        if (! node.hasType (IDs::take) || static_cast<int> (node.getProperty (IDs::takeId, -1)) != takeId)
+            continue;
+
+        const bool wasActive = getActiveTakeId (trackId) == takeId;
+
+        undoManager.beginNewTransaction();
+        trackNode.removeChild (c, &undoManager);
+
+        if (wasActive)
+        {
+            const auto remaining = getTakes (trackId);
+            if (remaining.empty())
+                trackNode.removeProperty (IDs::activeTake, &undoManager);
+            else
+                trackNode.setProperty (IDs::activeTake, remaining.back().id, &undoManager);
+        }
+
+        return true;
+    }
+
+    return false;
 }
 
 // ---------------------------------------------------------------------------

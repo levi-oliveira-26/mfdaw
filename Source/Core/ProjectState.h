@@ -9,6 +9,7 @@
 #include "Core/ClipModel.h"
 #include "Core/HarmonyChord.h"
 #include "Core/MelodyNote.h"
+#include "Core/TakeModel.h"
 #include "Core/TrackModel.h"
 #include "Core/TrackType.h"
 
@@ -25,6 +26,17 @@ inline constexpr int kMaxBpm         = 240;
 inline constexpr const char* kProjectFileExtension = ".mfdaw";
 
 enum class Scale : int { Major = 0, Minor = 1 };
+
+/** Um take de voz gravado numa faixa de Voz (cópia imutável para a UI). */
+struct TakeData
+{
+    int id { -1 };
+    juce::String filePath;
+    int startStep { 0 };            // compasso * 16 + passo em que a gravação começou
+    double durationSeconds { 0.0 };
+
+    [[nodiscard]] int startBar() const noexcept { return take::startBarOf (startStep); }
+};
 
 struct AudioClipModel
 {
@@ -72,6 +84,13 @@ namespace IDs
     inline const juce::Identifier note          { "NOTE" };
     inline const juce::Identifier noteStep      { "step" };          // 0..15
     inline const juce::Identifier notePitch     { "pitch" };         // MIDI 24..107
+
+    // --- Takes de voz (filhos de PLAYLIST_TRACK do tipo Record) ---
+    inline const juce::Identifier take          { "TAKE" };
+    inline const juce::Identifier takeId        { "takeId" };        // único na Playlist, nunca reutilizado
+    inline const juce::Identifier takeStartStep { "startStep" };
+    inline const juce::Identifier activeTake    { "activeTake" };    // propriedade da faixa: takeId em uso
+    inline const juce::Identifier nextTakeId    { "nextTakeId" };    // contador monotônico (nó PLAYLIST)
 
     // --- Harmonia por faixa (propriedade do PLAYLIST_TRACK do tipo Harmony) ---
     inline const juce::Identifier chordMask     { "chordMask" };     // bit n = cartão n ligado (ausente = todos)
@@ -183,6 +202,18 @@ public:
     /** Máscara de compassos (bit n = compasso n) coberta pelos clipes de UMA faixa; 0 = sem clipes. */
     [[nodiscard]] int getTrackBarMask (int trackId) const;
 
+    // --- Takes de voz (Slice 06) ---
+    // Só faixas do tipo Record. addRecordedTake é UMA transação de undo que cria o take,
+    // o marca como ativo e, se houver espaço, cria o clipe que o cobre na lane (o
+    // comprimento vem da duração e do BPM; é cortado para não invadir outro clipe).
+    // Devolve o takeId ou -1 (faixa errada, arquivo vazio, início/duração inválidos ou limite).
+    int addRecordedTake (int trackId, const juce::String& filePath, int startStep, double durationSeconds);
+    [[nodiscard]] std::vector<TakeData> getTakes (int trackId) const;          // em ordem de gravação
+    [[nodiscard]] int getActiveTakeId (int trackId) const;                      // -1 se não há takes
+    bool setActiveTake (int trackId, int takeId);
+    /** Remove o take (o arquivo no disco NÃO é apagado aqui). Se era o ativo, o mais recente assume. */
+    bool removeTake (int trackId, int takeId);
+
     // --- Harmonia (Slice 05) ---
     // Máscara dos cartões dos Smart Chords ligados na faixa (bit n = cartão n; padrão: todos).
     // 0 para faixas inexistentes ou que não são de Harmonia.
@@ -253,6 +284,9 @@ private:
 
     /** Próximo clipId (monotônico, único em toda a Playlist). */
     int allocateClipId();
+
+    /** Próximo takeId (monotônico, único em toda a Playlist). */
+    int allocateTakeId();
 
     /** Nó PLAYLIST_TRACK do id (inválido se não existir). */
     [[nodiscard]] juce::ValueTree findTrackNode (int trackId) const;
