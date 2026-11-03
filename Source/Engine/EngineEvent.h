@@ -96,7 +96,12 @@ struct EngineEvent
         return { Type::SetTakeStart, slot, startStep, 0 };
     }
 
-    [[nodiscard]] static EngineEvent setClipRegion (int slot, int region, int startStep, int endStep, int takeIndex) noexcept\n    {\n        return { Type::SetClipRegion, slot, region, startStep, endStep, takeIndex };\n    }\n\n    [[nodiscard]] static EngineEvent setTrackGain (int slot, int gainPermille) noexcept
+    [[nodiscard]] static EngineEvent setClipRegion (int slot, int region, int startStep, int endStep, int takeIndex) noexcept
+    {
+        return { Type::SetClipRegion, slot, region, startStep, endStep, takeIndex };
+    }
+
+    [[nodiscard]] static EngineEvent setTrackGain (int slot, int gainPermille) noexcept
     {
         return { Type::SetTrackGain, slot, gainPermille, 0 };
     }
