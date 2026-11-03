@@ -193,7 +193,18 @@ void PlaylistComponent::valueTreeChildRemoved (juce::ValueTree& parent, juce::Va
     if (parent.hasType (IDs::playlist) || child.hasType (IDs::playlist))
         triggerAsyncUpdate();
     else if (parent.hasType (IDs::playlistTrack) && child.hasType (IDs::clip))
+    {
+        const int removedTrackId = static_cast<int> (parent.getProperty (IDs::trackId, -1));
+        const int removedClipId = static_cast<int> (child.getProperty (IDs::clipId, -1));
+        if (removedTrackId == selectedClipTrackId && removedClipId == selectedClipId)
+        {
+            selectedClipTrackId = -1;
+            selectedClipId = -1;
+            if (onClipSelected)
+                onClipSelected (-1, -1);
+        }
         refreshRowForTrackNode (parent);
+    }
 }
 
 void PlaylistComponent::valueTreeRedirected (juce::ValueTree&)
@@ -205,6 +216,24 @@ void PlaylistComponent::handleAsyncUpdate()
 {
     const int previousCount = rows.size();
     rebuildRows();
+
+    // Evita manter uma seleção apontando para faixa/clipe removido ou substituído.
+    bool selectionExists = false;
+    if (selectedClipTrackId >= 0 && state.indexOfTrack (selectedClipTrackId) >= 0)
+        for (const auto& clip : state.getClips (selectedClipTrackId))
+            if (clip.id == selectedClipId)
+            {
+                selectionExists = true;
+                break;
+            }
+
+    if (! selectionExists && selectedClipId >= 0)
+    {
+        selectedClipTrackId = -1;
+        selectedClipId = -1;
+        if (onClipSelected)
+            onClipSelected (-1, -1);
+    }
 
     // Faixa nova => rola até ela.
     if (rows.size() > previousCount)
@@ -225,6 +254,18 @@ void PlaylistComponent::rebuildRows()
                 if (onTrackAction)
                     onTrackAction (action, trackId);
             };
+            row->onClipSelected = [this] (int trackId, int clipId)
+            {
+                selectedClipTrackId = trackId;
+                selectedClipId = clipId;
+
+                for (auto* currentRow : rows)
+                    currentRow->setSelectedClipId (currentRow->getTrackId() == trackId ? clipId : -1);
+
+                if (onClipSelected)
+                    onClipSelected (trackId, clipId);
+            };
+            row->setSelectedClipId (selectedClipTrackId == row->getTrackId() ? selectedClipId : -1);
             rowsHolder.addAndMakeVisible (row);
         }
     }

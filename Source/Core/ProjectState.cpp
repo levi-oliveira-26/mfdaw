@@ -17,6 +17,12 @@ constexpr const char* kDefaultTrackNames[kNumTracks] = {
 
 [[nodiscard]] bool isTrackValid (int track) noexcept { return track >= 0 && track < kNumTracks; }
 
+[[nodiscard]] bool isRecordTrackNode (const juce::ValueTree& trackNode)
+{
+    return trackNode.isValid()
+           && static_cast<int> (trackNode.getProperty (IDs::trackType, -1)) == static_cast<int> (TrackType::Record);
+}
+
 [[nodiscard]] juce::Identifier velocityProperty (int step)
 {
     return juce::Identifier ("velocity" + juce::String (step));
@@ -650,6 +656,39 @@ bool ProjectState::setClipRange (int trackId, int clipId, int startBar, int leng
     return false;
 }
 
+
+bool ProjectState::setClipTake (int trackId, int clipId, int takeId)
+{
+    auto trackNode = findTrackNode (trackId);
+    if (! isRecordTrackNode (trackNode))
+        return false;
+
+    if (takeId != -1)
+    {
+        const auto takes = getTakes (trackId);
+        if (std::none_of (takes.begin(), takes.end(),
+                          [takeId] (const TakeData& takeData) { return takeData.id == takeId; }))
+            return false;
+    }
+
+    for (int c = 0; c < trackNode.getNumChildren(); ++c)
+    {
+        auto node = trackNode.getChild (c);
+        if (! node.hasType (IDs::clip)
+            || static_cast<int> (node.getProperty (IDs::clipId, -1)) != clipId)
+            continue;
+
+        if (static_cast<int> (node.getProperty (IDs::takeId, -1)) == takeId)
+            return true;
+
+        undoManager.beginNewTransaction();
+        node.setProperty (IDs::takeId, takeId, &undoManager);
+        return true;
+    }
+
+    return false;
+}
+
 std::vector<ClipData> ProjectState::getClips (int trackId) const
 {
     std::vector<ClipData> result;
@@ -708,12 +747,6 @@ int ProjectState::getTrackBarMask (int trackId) const
 // ---------------------------------------------------------------------------
 namespace
 {
-bool isRecordTrackNode (const juce::ValueTree& trackNode)
-{
-    return trackNode.isValid()
-           && static_cast<int> (trackNode.getProperty (IDs::trackType, -1)) == static_cast<int> (TrackType::Record);
-}
-
 TakeData readTake (const juce::ValueTree& node)
 {
     return { static_cast<int> (node.getProperty (IDs::takeId, -1)),

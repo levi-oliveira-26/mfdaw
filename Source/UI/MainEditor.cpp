@@ -74,6 +74,10 @@ MainEditor::MainEditor (MainProcessor& processorToEdit)
 
     // ----- Playlist (única área de conteúdo ao iniciar) -----
     playlist.onTrackAction = [this] (TrackAction action, int trackId) { handleTrackAction (action, trackId); };
+    playlist.onClipSelected = [this] (int trackId, int clipId)
+    {
+        voiceRecorder.setSelectedClip (trackId, clipId);
+    };
     addAndMakeVisible (playlist);
 
     // ----- Gaveta do editor da faixa (oculta até o usuário acionar uma faixa) -----
