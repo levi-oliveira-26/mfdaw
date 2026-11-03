@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <functional>
 #include <vector>
 #include <juce_gui_basics/juce_gui_basics.h>
@@ -49,6 +50,9 @@ public:
 
     /** Chamado quando o botão de ação é clicado: (ação do domínio, trackId). */
     std::function<void (TrackAction, int)> onAction;
+    /** Chamado quando um clipe é selecionado: (trackId, clipId). */
+    std::function<void (int, int)> onClipSelected;
+    void setSelectedClipId (int clipId);
 
     void paint (juce::Graphics&) override;
     void resized() override;
@@ -67,13 +71,26 @@ private:
     [[nodiscard]] int clipIndexAtX (int x) const noexcept;               // -1 se vazio / fora da lane
     [[nodiscard]] juce::Rectangle<float> clipBounds (const ClipData& c) const noexcept;
     void showClipMenu (int clipId);
+    void refreshTakeVisuals();
+    [[nodiscard]] const struct TakeVisual* findTakeVisual (int takeId) const noexcept;
 
     ProjectState& state;
     const int trackId;
     const TrackType type;
     const TrackAction action;
 
+    struct TakeVisual
+    {
+        int id { -1 };
+        juce::String filePath;
+        juce::String label;
+        std::array<float, 32> peaks {};
+    };
+
     std::vector<ClipData> clips;     // cópia local; relida em refreshFromState()
+    std::vector<TakeData> takes;
+    std::vector<TakeVisual> takeVisuals;
+    int selectedClipId { -1 };
     DragMode dragMode { DragMode::None };
     ClipData dragOriginal;
     ClipData dragPreview;
