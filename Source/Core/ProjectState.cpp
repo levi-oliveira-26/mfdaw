@@ -584,7 +584,8 @@ int ProjectState::addClip (int trackId, int startBar, int lengthBars)
         return -1;
 
     auto trackNode = findTrackNode (trackId);
-    const bool isVoice = isRecordTrackNode (trackNode);
+    const bool isVoice = trackNode.isValid ()
+                         && static_cast<int> (trackNode.getProperty (IDs::trackType, -1)) == static_cast<int> (TrackType::Record);
     const int linkedTakeId = isVoice ? getActiveTakeId (trackId) : -1;
 
     // Clipes de Voz precisam identificar o áudio que devem reproduzir.
