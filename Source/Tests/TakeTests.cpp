@@ -174,6 +174,38 @@ private:
             expectEquals (state.addClip (emptyVoice, 0, 1), -1);
         }
 
+        beginTest ("Choosing a take updates only the selected clip, not the track's active take");
+        {
+            ProjectState state;
+            state.setBpm (120);
+            const int voice = state.addTrack (TrackType::Record);
+            const int t1 = state.addRecordedTake (voice, "one.wav", 0, 1.0);
+            const int t2 = state.addRecordedTake (voice, "two.wav", 32, 1.0);
+            const int t3 = state.addRecordedTake (voice, "three.wav", 64, 1.0);
+            auto clips = state.getClips (voice);
+            expectEquals (static_cast<int> (clips.size()), 3);
+            const int firstClipId = clips[0].id;
+            const int secondClipId = clips[1].id;
+
+            expect (state.setActiveTake (voice, t1));
+            expect (state.setClipTake (voice, firstClipId, t3));
+            clips = state.getClips (voice);
+            for (const auto& clip : clips)
+            {
+                if (clip.id == firstClipId) expectEquals (clip.takeId, t3);
+                if (clip.id == secondClipId) expectEquals (clip.takeId, t2);
+            }
+            expectEquals (state.getActiveTakeId (voice), t1);
+            expect (! state.setClipTake (voice, firstClipId, 99999));
+            expect (! state.setClipTake (voice, 99999, t1));
+
+            state.getUndoManager().undo();
+            clips = state.getClips (voice);
+            for (const auto& clip : clips)
+                if (clip.id == firstClipId) expectEquals (clip.takeId, t1);
+            expectEquals (state.getActiveTakeId (voice), t1);
+        }
+
         beginTest ("Removing a take removes linked clips in one undo transaction");
         {
             ProjectState state;

@@ -33,6 +33,8 @@ public:
 
     /** Botão de ação de alguma faixa foi acionado: (ação do domínio, trackId). */
     std::function<void (TrackAction, int)> onTrackAction;
+    /** Clipe selecionado na Playlist: (trackId, clipId). */
+    std::function<void (int, int)> onClipSelected;
 
     /** Posição do playhead em compassos, 0 <= bars < kPlaylistBars (fracionária). Barato:
      *  só repinta o overlay quando o pixel muda. Chamado pela message thread (timer da UI). */
@@ -77,6 +79,8 @@ private:
     juce::OwnedArray<TrackRowComponent> rows;
     PlayheadOverlay playheadOverlay;
     float playheadBars { 0.0f };
+    int selectedClipTrackId { -1 };
+    int selectedClipId { -1 };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PlaylistComponent)
 };

@@ -76,6 +76,11 @@ target_compile_definitions(MFDaw PUBLIC
 # MSVC: fontes em UTF-8 (strings com acentos na UI)
 target_compile_options(MFDaw PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
 
+# Evita que o linker esgote a memoria ao gerar o PDB do plugin em Debug.
+if(MSVC)
+    target_link_options(MFDaw PRIVATE $<$<CONFIG:Debug>:/DEBUG:FASTLINK>)
+endif()
+
 add_executable(MFDawTests
     Source/Tests/RunStepSequencerTests.cpp
     Source/Tests/StepSequencerTests.cpp

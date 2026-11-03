@@ -197,6 +197,8 @@ public:
     bool removeClip (int trackId, int clipId);
     /** Move e/ou redimensiona de uma só vez (um único passo de undo). */
     bool setClipRange (int trackId, int clipId, int startBar, int lengthBars);
+    /** Vincula um clipe de Voz a um take da mesma faixa; -1 remove o vínculo. */
+    bool setClipTake (int trackId, int clipId, int takeId);
     /** Clipes da faixa em ordem crescente de início (vazio se a faixa não existe). */
     [[nodiscard]] std::vector<ClipData> getClips (int trackId) const;
     /** Máscara de compassos (bit n = compasso n) coberta pelos clipes de UMA faixa; 0 = sem clipes. */
