@@ -50,6 +50,19 @@ public:
             expectWithinAbsoluteError (render (player, 2000), 0.5f, 1e-4f);
         }
 
+        beginTest ("A take that finishes loading after the region starts can begin on a later step");
+        {
+            TakePlayer player;
+            auto a = makeBuffer (200000, 0.45f);
+            player.setClipRegion (0, 0, 0, 16, 0);
+            player.triggerStep (0, 0); // buffer ainda não publicado
+            expect (! player.isPlaying (0));
+            player.publishTake (0, 0, a.get());
+            player.triggerStep (0, 1);
+            expect (player.isPlaying (0));
+            expectWithinAbsoluteError (render (player, 2000), 0.45f, 1e-4f);
+        }
+
         beginTest ("Multiple non-overlapping regions in one slot select different takes");
         {
             TakePlayer player;
