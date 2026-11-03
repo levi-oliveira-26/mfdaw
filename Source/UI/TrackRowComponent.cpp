@@ -215,11 +215,7 @@ void TrackRowComponent::paint (juce::Graphics& g)
         const auto rect = clipBounds (isDragged ? dragPreview : c);
 
         g.setColour (accent.withAlpha (isDragged ? 1.0f : 0.85f));
-        g.fillRoundedRectangle (rect, 4.0f);
-
-        // Alça de redimensionar (plana, sem sombra).
-        g.setColour (col (kBgDeep).withAlpha (0.35f));
-        g.fillRect (rect.withLeft (rect.getRight() - 4.0f).reduced (0.0f, 8.0f));
+        g.fillRect (rect);
 
         if (type == TrackType::Record)
         {
@@ -258,7 +254,7 @@ void TrackRowComponent::paint (juce::Graphics& g)
         if (c.id == selectedClipId)
         {
             g.setColour (col (kTextPrimary));
-            g.drawRoundedRectangle (rect.reduced (1.0f), 4.0f, 2.0f);
+            g.drawRect (rect.reduced (1.0f), 2.0f);
         }
     }
 

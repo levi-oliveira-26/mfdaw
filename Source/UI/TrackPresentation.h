@@ -22,7 +22,7 @@ namespace mf::presentation
         case TrackType::Harmony: return col (kBrandHarmony);
         case TrackType::Melody:  return col (kBrandMelody);
         case TrackType::Record:  return col (kBrandVoice);
-        case TrackType::Sample:  return col (kTextPrimary);   // sem token próprio (como o antigo passo 5)
+        case TrackType::Sample:  return col (kBrandSample);
     }
 
     return col (kTextMuted);

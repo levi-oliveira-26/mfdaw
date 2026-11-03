@@ -16,6 +16,7 @@ inline constexpr juce::uint32 kBrandRhythm     = 0xffFF4C4C;
 inline constexpr juce::uint32 kBrandHarmony    = 0xff3399FF;
 inline constexpr juce::uint32 kBrandMelody     = 0xff00E676;
 inline constexpr juce::uint32 kBrandVoice      = 0xffFFC400;
+inline constexpr juce::uint32 kBrandSample     = 0xff9E9E9E;
 inline constexpr juce::uint32 kActionRecord    = 0xffFF2A2A;
 inline constexpr juce::uint32 kBorderSubtle    = 0xff303040;
 
