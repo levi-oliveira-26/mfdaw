@@ -25,6 +25,7 @@ namespace mf
  *  SetMelodyClear: a = slot (esvazia só as NOTAS do slot; os compassos vão por SetSlotBars)
  *  SetSlotBars   : a = slot, b = máscara de compassos cobertos pelos clipes da faixa; 0 = rascunho
  *  SetHarmonyChord: a = slot, b = cartão (0..3) | (ligado ? 0x100 : 0), c = 3 notas MIDI empacotadas (harmony::packNotes)
+ *  SetTakeStart  : a = slot, b = passo absoluto (compasso*16+passo) em que o take ativo começa; -1 = sem take
  *
  * "Slot" é o índice da faixa na Playlist (0..kMaxPlaylistTracks-1).
  */
@@ -32,7 +33,8 @@ struct EngineEvent
 {
     enum class Type : std::uint8_t { SetBpm, SetPlaying, SetTrackMask, SetStepVelocity, ChordNote,
                                      SetTrackType, SetTrackGain, SetDrumBars,
-                                     SetMelodyNote, SetMelodyClear, SetSlotBars, SetHarmonyChord };
+                                     SetMelodyNote, SetMelodyClear, SetSlotBars, SetHarmonyChord,
+                                     SetTakeStart };
 
     Type type { Type::SetBpm };
     std::int32_t a { 0 };
@@ -85,6 +87,11 @@ struct EngineEvent
     [[nodiscard]] static EngineEvent setSlotBars (int slot, int barMask) noexcept
     {
         return { Type::SetSlotBars, slot, barMask, 0 };
+    }
+
+    [[nodiscard]] static EngineEvent setTakeStart (int slot, int startStep) noexcept
+    {
+        return { Type::SetTakeStart, slot, startStep, 0 };
     }
 
     [[nodiscard]] static EngineEvent setTrackGain (int slot, int gainPermille) noexcept

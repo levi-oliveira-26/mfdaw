@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cmath>
 
+#include <juce_audio_formats/juce_audio_formats.h>
+
 #include "Core/ChordGenerator.h"
 #include "Core/FaderScale.h"
 #include "UI/MainEditor.h"
@@ -48,6 +50,7 @@ MainProcessor::~MainProcessor()
 {
     projectState.getTree().removeListener (this);
     projectState.getSession().removeListener (this);
+    takePlayer.releaseAll();
 }
 
 // ===========================================================================
@@ -159,9 +162,87 @@ void MainProcessor::pushArrangementState()
     {
         const auto track = slot < numTracks ? projectState.getTrackByIndex (slot) : nullptr;
         const bool hasPattern = track != nullptr
-                                && (track->getType() == TrackType::Melody || track->getType() == TrackType::Harmony);
+                                && (track->getType() == TrackType::Melody || track->getType() == TrackType::Harmony
+                                    || track->getType() == TrackType::Record);
         post (EngineEvent::setSlotBars (slot, hasPattern ? projectState.getTrackBarMask (track->getId()) : 0));
     }
+}
+
+std::shared_ptr<TakeBuffer> MainProcessor::loadTakeBuffer (const juce::String& path)
+{
+    const juce::File file (path);
+    if (! file.existsAsFile())
+        return nullptr;
+
+    juce::AudioFormatManager formats;
+    formats.registerBasicFormats();
+    const std::unique_ptr<juce::AudioFormatReader> reader (formats.createReaderFor (file));
+
+    if (reader == nullptr || reader->sampleRate <= 0.0 || reader->numChannels == 0
+        || static_cast<double> (reader->lengthInSamples) > reader->sampleRate * kMaxPlayableTakeSeconds)
+        return nullptr;
+
+    const auto length = static_cast<int> (reader->lengthInSamples);
+    juce::AudioBuffer<float> temp (static_cast<int> (reader->numChannels), length);
+    reader->read (&temp, 0, length, 0, true, true);
+
+    auto result = std::make_shared<TakeBuffer>();
+    result->sampleRate = reader->sampleRate;
+    result->samples.assign (static_cast<std::size_t> (length), 0.0f);
+
+    const float channelScale = 1.0f / static_cast<float> (temp.getNumChannels());   // mono = média dos canais
+    for (int ch = 0; ch < temp.getNumChannels(); ++ch)
+    {
+        const float* in = temp.getReadPointer (ch);
+        for (int i = 0; i < length; ++i)
+            result->samples[static_cast<std::size_t> (i)] += in[i] * channelScale;
+    }
+
+    return result;
+}
+
+void MainProcessor::syncTakes()
+{
+    const int numTracks = projectState.getNumTracks();
+
+    for (int slot = 0; slot < kMaxPlaylistTracks; ++slot)
+    {
+        const auto track = slot < numTracks ? projectState.getTrackByIndex (slot) : nullptr;
+        const auto index = static_cast<std::size_t> (slot);
+
+        juce::String path;
+        int startStep = -1;
+
+        if (track != nullptr && track->getType() == TrackType::Record)
+        {
+            const int activeId = projectState.getActiveTakeId (track->getId());
+            for (const auto& t : projectState.getTakes (track->getId()))
+                if (t.id == activeId)
+                {
+                    path = t.filePath;
+                    startStep = t.startStep;
+                }
+        }
+
+        if (path != takePaths[index])
+        {
+            takePaths[index] = path;
+            auto fresh = path.isEmpty() ? nullptr : loadTakeBuffer (path);
+
+            auto old = std::move (takeBuffers[index]);
+            takeBuffers[index] = fresh;
+            takePlayer.publish (slot, fresh.get());
+
+            if (old != nullptr)
+                takeGraveyard.push_back (std::move (old));   // só é destruído quando a audio thread soltar
+        }
+
+        post (EngineEvent::setTakeStart (slot, takeBuffers[index] != nullptr ? startStep : -1));
+    }
+
+    takeGraveyard.erase (std::remove_if (takeGraveyard.begin(), takeGraveyard.end(),
+                                         [this] (const std::shared_ptr<TakeBuffer>& b) { return takePlayer.isRetired (b.get()); }),
+                         takeGraveyard.end());
 }
 
 void MainProcessor::pushHarmonySlot (int slot)
@@ -224,6 +305,7 @@ void MainProcessor::pushPlaylistState()
     pushMelodyState();        // slots mudam de lugar: notas de Melodia acompanham
     pushHarmonyState();       // ... e os cartões de Harmonia
     pushArrangementState();   // remover/carregar faixa muda os clipes (bateria e melodia)
+    syncTakes();              // ... e o take ativo de cada faixa de Voz
 }
 
 void MainProcessor::valueTreePropertyChanged (juce::ValueTree& changedTree, const juce::Identifier& property)
@@ -281,6 +363,8 @@ void MainProcessor::valueTreePropertyChanged (juce::ValueTree& changedTree, cons
         }
         else if (property == IDs::chordMask)
             pushHarmonySlot (slot);   // cartão ligado/desligado (inclui undo/redo)
+        else if (property == IDs::activeTake)
+            syncTakes();              // outro take escolhido (inclui undo/redo)
     }
     else if (changedTree.hasType (IDs::clip))
     {
@@ -317,6 +401,8 @@ void MainProcessor::valueTreeChildAdded (juce::ValueTree& parent, juce::ValueTre
     {
         if (child.hasType (IDs::note))
             postMelodyNoteChange (parent, child, true);   // nota criada (ou refeita por redo)
+        else if (child.hasType (IDs::take))
+            syncTakes();
         else
             pushArrangementState();                       // clipe criado numa faixa
         return;
@@ -339,6 +425,8 @@ void MainProcessor::valueTreeChildRemoved (juce::ValueTree& parent, juce::ValueT
     {
         if (child.hasType (IDs::note))
             postMelodyNoteChange (parent, child, false);  // nota apagada (ou desfeita)
+        else if (child.hasType (IDs::take))
+            syncTakes();
         else
             pushArrangementState();
         return;
@@ -428,6 +516,7 @@ void MainProcessor::drainEvents() noexcept
                     currentBar.store (0, std::memory_order_relaxed);   // Stop = volta ao início da Playlist
                     releaseMelodyVoices();
                     releaseHarmonyVoices();
+                    takePlayer.releaseAll();
                 }
                 else if (event.a == 1)
                 {
@@ -441,6 +530,7 @@ void MainProcessor::drainEvents() noexcept
                     playheadStep.store (-1, std::memory_order_relaxed);
                     releaseMelodyVoices();
                     releaseHarmonyVoices();
+                    takePlayer.releaseAll();
                 }
                 break;
             }
@@ -472,7 +562,12 @@ void MainProcessor::drainEvents() noexcept
                 melodySequencer.clearNotes (event.a);
                 break;
 
+            case EngineEvent::Type::SetTakeStart:
+                takePlayer.setStartStep (event.a, event.b);
+                break;
+
             case EngineEvent::Type::SetSlotBars:
+                takePlayer.setBars (event.a, event.b);
                 melodySequencer.setBars (event.a, event.b);
                 harmonySequencer.setBars (event.a, event.b);
                 break;
@@ -581,6 +676,7 @@ void MainProcessor::triggerStepInBar (int step, int bar, int sampleOffset, juce:
     // independentemente de a Bateria estar audível neste compasso.
     releaseMelodyVoices();
     triggerMelodyStep (step, bar);
+    takePlayer.triggerStep (bar, step);
 
     if (step == 0)   // o acorde dura o compasso inteiro: troca só no primeiro passo
     {
@@ -669,6 +765,7 @@ void MainProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBu
     // Eventos MIDI de entrada serão tratados nos Passos 2/3 (acordes / piano roll).
 
     drainEvents();
+    takePlayer.beginBlock();
 
     if (recordingCountInCancelled.exchange (false, std::memory_order_acq_rel))
     {
@@ -840,8 +937,10 @@ void MainProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBu
         for (auto& voice : harmonyVoices)
             harmonyMix += voice.process (sampleRate) * slotGainSmoothed[static_cast<std::size_t> (voice.slot)];
 
+        const float takeMix = takePlayer.process (sampleRate, slotGainSmoothed);
+
         const float mix = std::clamp ((drumMix * drumGainSmoothed + previewMix * previewGainSmoothed
-                                       + melodyMix + harmonyMix) * kMasterGain,
+                                       + melodyMix + harmonyMix + takeMix) * kMasterGain,
                                       -1.0f, 1.0f);
 
         for (int ch = 0; ch < numChannels; ++ch)

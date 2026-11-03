@@ -4,6 +4,7 @@
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <vector>
 #include <juce_audio_processors/juce_audio_processors.h>
 
 #include "Core/ProjectState.h"
@@ -14,6 +15,7 @@
 #include "Engine/HarmonySequencer.h"
 #include "Engine/MelodySequencer.h"
 #include "Engine/SampleManager.h"
+#include "Engine/TakePlayer.h"
 
 namespace mf
 {
@@ -109,6 +111,10 @@ private:
     void pushHarmonyState();
     /** Reenvia os cartões de UM slot (cartão ligado/desligado pelo usuário). */
     void pushHarmonySlot (int slot);
+    /** Carrega (se mudou) o take ativo de cada faixa de Voz e o publica para a audio thread. */
+    void syncTakes();
+    /** WAV -> buffer mono em float (message thread). nullptr se ilegível ou longo demais. */
+    [[nodiscard]] static std::shared_ptr<TakeBuffer> loadTakeBuffer (const juce::String& path);
     /** Uma nota de Melodia entrou/saiu da árvore: envia só essa mudança ao slot da faixa. */
     void postMelodyNoteChange (const juce::ValueTree& trackNode, const juce::ValueTree& noteNode, bool on);
 
@@ -211,6 +217,14 @@ private:
         stealIndex = (stealIndex + 1) % pool.size();
         return stolen;
     }
+
+    // Takes de voz (Slice 07). Os buffers pertencem à message thread; a audio thread só
+    // lê ponteiros publicados no TakePlayer (hazard pointer) e nunca libera nada.
+    static constexpr double kMaxPlayableTakeSeconds = 600.0;
+    TakePlayer takePlayer;
+    std::array<std::shared_ptr<TakeBuffer>, kMaxPlaylistTracks> takeBuffers {};   // message thread
+    std::array<juce::String, kMaxPlaylistTracks> takePaths {};                    // message thread
+    std::vector<std::shared_ptr<TakeBuffer>> takeGraveyard;                       // message thread
 
     std::array<float, kMaxPlaylistTracks> slotGainSmoothed {};   // ganho suavizado por slot (preenchido no ctor)
 
