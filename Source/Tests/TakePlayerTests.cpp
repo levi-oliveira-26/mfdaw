@@ -19,7 +19,7 @@ public:
         std::array<float, TakePlayer::kSlots> gains {};
         gains.fill (1.0f);
 
-        auto makeBuffer = [] (std::size_t n, float value, double sampleRate = rate)
+        auto makeBuffer = [] (std::size_t n, float value, double sampleRate = 48000.0)
         {
             auto b = std::make_unique<TakeBuffer>();
             b->samples.assign (n, value);
