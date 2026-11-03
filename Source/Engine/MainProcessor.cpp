@@ -66,10 +66,12 @@ MainProcessor::MainProcessor()
 
     // Sincroniza o motor com o estado inicial do projeto.
     pushFullState();
+    startTimerHz (10); // recolhe buffers aposentados após a audio thread terminar de usá-los
 }
 
 MainProcessor::~MainProcessor()
 {
+    stopTimer();
     takeLoaderPool.removeAllJobs (true, -1);
     cancelPendingUpdate();
     {
@@ -315,6 +317,13 @@ void MainProcessor::handleAsyncUpdate()
                                          [this] (const std::shared_ptr<TakeBuffer>& b) { return takePlayer.isRetired (b.get()); }),
                          takeGraveyard.end());
 }
+void MainProcessor::timerCallback()
+{
+    takeGraveyard.erase (std::remove_if (takeGraveyard.begin(), takeGraveyard.end(),
+                                         [this] (const std::shared_ptr<TakeBuffer>& b) { return takePlayer.isRetired (b.get()); }),
+                         takeGraveyard.end());
+}
+
 void MainProcessor::pushClipRegions()
 {
     const int numTracks = projectState.getNumTracks();
