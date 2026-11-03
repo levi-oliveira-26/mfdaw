@@ -64,6 +64,14 @@ public:
     void mouseDoubleClick (const juce::MouseEvent&) override;
 
 private:
+    struct TakeVisual
+    {
+        int id { -1 };
+        juce::String filePath;
+        juce::String label;
+        std::array<float, 32> peaks {};
+    };
+
     enum class DragMode { None, Move, ResizeRight };
     static constexpr int kResizeHandle = 10;   // px da borda direita que redimensionam
 
@@ -72,20 +80,12 @@ private:
     [[nodiscard]] juce::Rectangle<float> clipBounds (const ClipData& c) const noexcept;
     void showClipMenu (int clipId);
     void refreshTakeVisuals();
-    [[nodiscard]] const struct TakeVisual* findTakeVisual (int takeId) const noexcept;
+    [[nodiscard]] const TakeVisual* findTakeVisual (int takeId) const noexcept;
 
     ProjectState& state;
     const int trackId;
     const TrackType type;
     const TrackAction action;
-
-    struct TakeVisual
-    {
-        int id { -1 };
-        juce::String filePath;
-        juce::String label;
-        std::array<float, 32> peaks {};
-    };
 
     std::vector<ClipData> clips;     // cópia local; relida em refreshFromState()
     std::vector<TakeData> takes;
