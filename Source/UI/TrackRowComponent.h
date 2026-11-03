@@ -50,6 +50,8 @@ public:
 
     /** Chamado quando o botão de ação é clicado: (ação do domínio, trackId). */
     std::function<void (TrackAction, int)> onAction;
+    /** Chamado ao selecionar a faixa pelo botão de ação: tipo da faixa. */
+    std::function<void (TrackType)> onTrackSelected;
     /** Chamado quando um clipe é selecionado: (trackId, clipId). */
     std::function<void (int, int)> onClipSelected;
     void setSelectedClipId (int clipId);

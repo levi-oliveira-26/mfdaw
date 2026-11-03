@@ -55,6 +55,7 @@ private:
 
     // --- Gaveta do editor da faixa ---
     void handleTrackAction (TrackAction action, int trackId);
+    void handleTrackSelected (TrackType type);
     void closeDetailPanel();
     void updateDetailPanel();
 

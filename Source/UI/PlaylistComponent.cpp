@@ -249,6 +249,11 @@ void PlaylistComponent::rebuildRows()
         if (const auto track = state.getTrackByIndex (i))
         {
             auto* row = rows.add (new TrackRowComponent (state, *track));
+            row->onTrackSelected = [this] (TrackType type)
+            {
+                if (onTrackSelected)
+                    onTrackSelected (type);
+            };
             row->onAction = [this] (TrackAction action, int trackId)
             {
                 if (onTrackAction)

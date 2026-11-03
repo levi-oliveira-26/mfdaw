@@ -33,6 +33,8 @@ public:
 
     /** Botão de ação de alguma faixa foi acionado: (ação do domínio, trackId). */
     std::function<void (TrackAction, int)> onTrackAction;
+    /** Faixa selecionada pelo botão de ação: tipo da faixa. */
+    std::function<void (TrackType)> onTrackSelected;
     /** Clipe selecionado na Playlist: (trackId, clipId). */
     std::function<void (int, int)> onClipSelected;
 

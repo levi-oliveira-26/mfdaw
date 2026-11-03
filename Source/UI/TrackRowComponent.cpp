@@ -63,6 +63,8 @@ TrackRowComponent::TrackRowComponent (ProjectState& stateToUse, const TrackModel
     actionButton.setColour (juce::TextButton::textColourOffId, theme::col (theme::kBgDeep));
     actionButton.onClick = [this]
     {
+        if (onTrackSelected)
+            onTrackSelected (type);
         if (onAction)
             onAction (action, trackId);
     };

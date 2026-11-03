@@ -73,6 +73,7 @@ MainEditor::MainEditor (MainProcessor& processorToEdit)
     addAndMakeVisible (keyBox);
 
     // ----- Playlist (única área de conteúdo ao iniciar) -----
+    playlist.onTrackSelected = [this] (TrackType type) { handleTrackSelected (type); };
     playlist.onTrackAction = [this] (TrackAction action, int trackId) { handleTrackAction (action, trackId); };
     playlist.onClipSelected = [this] (int trackId, int clipId)
     {
@@ -222,6 +223,30 @@ void MainEditor::handleTrackAction (TrackAction action, int trackId)
     updateDetailPanel();
     resized();
     repaint();
+}
+
+void MainEditor::handleTrackSelected (TrackType type)
+{
+    switch (type)
+    {
+        case TrackType::Drum:
+            detailAction = TrackAction::OpenStepSequencer;
+            break;
+        case TrackType::Harmony:
+            detailAction = TrackAction::OpenSmartChords;
+            break;
+        case TrackType::Melody:
+            detailAction = TrackAction::OpenPianoRoll;
+            break;
+        case TrackType::Record:
+            detailAction = TrackAction::ToggleRecording;
+            break;
+        case TrackType::Sample:
+            detailAction = TrackAction::OpenSampleEditor;
+            break;
+    }
+
+    updateDetailPanel();
 }
 
 void MainEditor::closeDetailPanel()
