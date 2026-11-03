@@ -174,7 +174,7 @@ void PianoRollComponent::paint (juce::Graphics& g)
         g.drawHorizontalLine (juce::roundToInt (rowBounds.getBottom()) - 1,
                               static_cast<float> (grid.getX()), static_cast<float> (grid.getRight()));
 
-        if (allowed)
+        if (allowed && midiNote % 12 == 0)
         {
             g.setColour (isC ? col (kBrandMelody) : col (kTextMuted));
             g.drawText (noteName (midiNote),

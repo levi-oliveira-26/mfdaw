@@ -130,14 +130,14 @@ public:
         juce::Path valueTrack;
         valueTrack.addCentredArc (centre.x, centre.y, radius, radius,
                                   0.0f, rotaryStartAngle, angle, true);
-        g.setColour (juce::Colour (0xffff4c4c));
+        g.setColour (juce::Colour (0xffd96c54));
         g.strokePath (valueTrack, juce::PathStrokeType (3.0f));
 
-        g.setColour (juce::Colour (0xffd9d9d9));
-        g.fillEllipse (centre.x - radius * 0.58f, centre.y - radius * 0.58f,
-                       radius * 1.16f, radius * 1.16f);
+        g.setColour (juce::Colour (0xff25272b));
+        g.fillEllipse (centre.x - radius * 0.62f, centre.y - radius * 0.62f,
+                       radius * 1.24f, radius * 1.24f);
 
-        g.setColour (juce::Colours::white);
+        g.setColour (juce::Colour (0xfff2f2f2));
         juce::Line<float> pointer (centre.getX(), centre.getY(),
                                    centre.getX(), centre.getY() - radius * 0.42f);
         pointer.applyTransform (juce::AffineTransform::rotation (angle,

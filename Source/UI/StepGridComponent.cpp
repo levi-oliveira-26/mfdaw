@@ -124,11 +124,6 @@ void StepGridComponent::paint (juce::Graphics& g)
 
     g.fillAll (col (kSurfaceBase));
     g.setColour (col (kTextPrimary));
-    g.setFont (makeFont (13.0f, true));
-    g.drawText ("Swing",
-                juce::Rectangle<float> (static_cast<float> (getWidth() - kSwingKnobSize - 12 - 8 - 64),
-                                        4.0f, 64.0f, static_cast<float> (kSwingKnobSize)),
-                juce::Justification::centredRight);
     g.setColour (gridBackground);
     g.fillRect (grid);
 
