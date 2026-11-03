@@ -11,189 +11,164 @@
 
 namespace mf
 {
-/** Áudio de um take já carregado (mono, float). Criado e destruído SÓ na message thread. */
 struct TakeBuffer
 {
     std::vector<float> samples;
     double sampleRate { 44100.0 };
 };
 
-/**
- * TakePlayer — reprodução dos takes de voz dentro dos clipes (Slice 07).
- *
- * Header-only e sem JUCE (testável sem o motor de áudio).
- *
- * Regra de ouro: a audio thread NUNCA libera memória. Os TakeBuffer pertencem à
- * message thread, que publica um ponteiro cru por slot (`publish`). Para saber
- * quando um buffer antigo pode ser destruído usa-se o padrão "hazard pointer":
- * a audio thread anuncia (`hazard`) o ponteiro que está usando antes de lê-lo, e
- * a message thread só destrói buffers que não estão publicados nem anunciados
- * (`isRetired`).
- *
- * Por passo, cada slot decide: fora de um clipe -> solta (fade curto); no passo
- * exato de início do take -> começa do zero. Faixa de Voz sem clipe é silenciosa
- * (máscara 0 = mudo, ao contrário do "rascunho" da Bateria/Melodia).
- */
+/** Reproduz takes por regiões de clipe sem alocação, bloqueio ou I/O na audio thread. */
 class TakePlayer
 {
 public:
     static constexpr int kSlots = kMaxPlaylistTracks;
+    static constexpr int kMaxRegionsPerSlot = kPlaylistBars;
     static constexpr double kFadeSeconds = 0.005;
 
-    // ---------------- Message thread ----------------
-    void publish (int slot, const TakeBuffer* buffer) noexcept
+    struct Region { int startStep { -1 }; int endStep { -1 }; int takeIndex { -1 }; };
+
+    // Message thread
+    void publishTake (int slot, int takeIndex, const TakeBuffer* buffer) noexcept
     {
-        if (isValidSlot (slot))
-            published[idx (slot)].store (buffer, std::memory_order_seq_cst);
+        if (validSlot (slot) && validTake (takeIndex))
+            published[index (slot)][index (takeIndex)].store (buffer, std::memory_order_seq_cst);
     }
 
-    /** true se `buffer` não está publicado nem em uso: pode ser destruído. */
     [[nodiscard]] bool isRetired (const TakeBuffer* buffer) const noexcept
     {
+        if (buffer == nullptr) return true;
         for (int s = 0; s < kSlots; ++s)
-            if (published[idx (s)].load (std::memory_order_seq_cst) == buffer
-                || hazard[idx (s)].load (std::memory_order_seq_cst) == buffer)
+        {
+            for (int t = 0; t < kMaxTakesPerTrack; ++t)
+                if (published[index (s)][index (t)].load (std::memory_order_seq_cst) == buffer)
+                    return false;
+            if (hazard[index (s)].load (std::memory_order_seq_cst) == buffer)
                 return false;
+        }
         return true;
     }
 
-    // ---------------- Audio thread ----------------
-    void setBars (int slot, int barMask) noexcept
+    // Audio thread: endStep é exclusivo; takeIndex é o índice na tabela da faixa.
+    void setClipRegion (int slot, int regionIndex, int startStep, int endStep, int takeIndex) noexcept
     {
-        if (isValidSlot (slot))
-            barMasks[idx (slot)] = barMask & ((1 << kPlaylistBars) - 1);
+        if (! validSlot (slot) || regionIndex < 0 || regionIndex >= kMaxRegionsPerSlot)
+            return;
+        auto& r = regions[index (slot)][static_cast<std::size_t> (regionIndex)];
+        if (startStep < 0 || endStep <= startStep || endStep > kPlaylistSteps || ! validTake (takeIndex))
+            r = Region {};
+        else
+            r = { startStep, endStep, takeIndex };
     }
 
-    void setStartStep (int slot, int startStep) noexcept
+    void clearRegions (int slot) noexcept
     {
-        if (isValidSlot (slot))
-            startSteps[idx (slot)] = take::isValidStartStep (startStep) ? startStep : -1;
+        if (! validSlot (slot)) return;
+        for (auto& r : regions[index (slot)]) r = Region {};
     }
 
-    /** Início de cada bloco: protege os buffers publicados e reinicia vozes cujo take mudou. */
-    void beginBlock() noexcept
-    {
-        for (int s = 0; s < kSlots; ++s)
-        {
-            auto& slotHazard = hazard[idx (s)];
-            const auto& slotPublished = published[idx (s)];
+    void beginBlock() noexcept {}
 
-            const TakeBuffer* p = slotPublished.load (std::memory_order_seq_cst);
-            for (int attempt = 0; attempt < 4; ++attempt)
-            {
-                slotHazard.store (p, std::memory_order_seq_cst);
-                const TakeBuffer* again = slotPublished.load (std::memory_order_seq_cst);
-                if (again == p)
-                    break;
-                p = again;
-            }
-
-            if (slotPublished.load (std::memory_order_seq_cst) != p)   // publicação em corrida: silêncio neste bloco
-            {
-                p = nullptr;
-                slotHazard.store (nullptr, std::memory_order_seq_cst);
-            }
-
-            auto& voice = voices[idx (s)];
-            if (voice.buffer != p)
-            {
-                voice = Voice {};
-                voice.buffer = p;
-            }
-        }
-    }
-
-    /** Chamado a cada passo agendado (compasso 0-based, passo 0..15). */
     void triggerStep (int bar, int step) noexcept
     {
+        if (step < 0 || step >= kStepsPerBar || bar < 0 || bar >= kPlaylistBars) return;
         const int absoluteStep = bar * kStepsPerBar + step;
 
         for (int s = 0; s < kSlots; ++s)
         {
-            auto& voice = voices[idx (s)];
-            const int start = startSteps[idx (s)];
+            auto& voice = voices[index (s)];
+            const Region* match = nullptr;
+            for (const auto& r : regions[index (s)])
+                if (r.startStep >= 0 && absoluteStep >= r.startStep && absoluteStep < r.endStep)
+                { match = &r; break; }
 
-            if (voice.buffer == nullptr || start < 0)
-                continue;
+            if (match == nullptr) { voice.target = false; voice.lastStartedRegionStartStep = -1; continue; }
+            if (absoluteStep != match->startStep && voice.lastStartedRegionStartStep == match->startStep) continue;
 
-            const int mask = barMasks[idx (s)];
-            if (mask == 0 || ! clip::isBarAudible (mask, bar))
+            const TakeBuffer* buffer = acquireBuffer (s, match->takeIndex);
+            if (buffer == nullptr || buffer->samples.size() < 2 || buffer->sampleRate <= 0.0)
             {
                 voice.target = false;
+                voice.active = false;
+                voice.buffer = nullptr;
+                hazard[index (s)].store (nullptr, std::memory_order_seq_cst);
                 continue;
             }
 
-            if (absoluteStep == start)
-            {
-                voice.pos = 0.0;
-                voice.target = true;
-                voice.active = true;
-            }
+            voice.buffer = buffer;
+            voice.lastStartedRegionStartStep = match->startStep;
+            voice.pos = 0.0;
+            voice.env = 0.0f;
+            voice.target = true;
+            voice.active = true;
         }
     }
 
-    /** Pause / Stop: todas as vozes soltam. */
-    void releaseAll() noexcept
-    {
-        for (auto& voice : voices)
-            voice.target = false;
-    }
+    void releaseAll() noexcept { for (auto& v : voices) v.target = false; }
 
-    /** Uma amostra da soma de todas as vozes, cada uma vezes o ganho do próprio slot. */
     [[nodiscard]] float process (double hostSampleRate, const std::array<float, kSlots>& slotGains) noexcept
     {
+        if (hostSampleRate <= 0.0) return 0.0f;
         float sum = 0.0f;
         for (int s = 0; s < kSlots; ++s)
-            if (voices[idx (s)].active)
-                sum += processVoice (voices[idx (s)], hostSampleRate) * slotGains[idx (s)];
+        {
+            auto& v = voices[index (s)];
+            if (! v.active) continue;
+            sum += processVoice (v, hostSampleRate) * slotGains[index (s)];
+            if (! v.active)
+            {
+                v.buffer = nullptr;
+                hazard[index (s)].store (nullptr, std::memory_order_seq_cst);
+            }
+        }
         return sum;
     }
 
     [[nodiscard]] bool isPlaying (int slot) const noexcept
     {
-        return isValidSlot (slot) && voices[idx (slot)].active;
+        return validSlot (slot) && voices[index (slot)].active;
     }
 
 private:
-    struct Voice
+    struct Voice { const TakeBuffer* buffer { nullptr }; double pos { 0.0 }; float env { 0.0f }; int lastStartedRegionStartStep { -1 }; bool target { false }; bool active { false }; };
+
+    [[nodiscard]] const TakeBuffer* acquireBuffer (int slot, int takeIndex) noexcept
     {
-        const TakeBuffer* buffer { nullptr };
-        double pos { 0.0 };
-        float env { 0.0f };
-        bool target { false };
-        bool active { false };
-    };
-
-    [[nodiscard]] static float processVoice (Voice& v, double hostSampleRate) noexcept
-    {
-        const float rampStep = static_cast<float> (1.0 / (kFadeSeconds * hostSampleRate));
-        v.env = v.target ? (v.env + rampStep > 1.0f ? 1.0f : v.env + rampStep)
-                         : (v.env - rampStep < 0.0f ? 0.0f : v.env - rampStep);
-
-        const auto& samples = v.buffer->samples;
-        const auto index = static_cast<std::size_t> (v.pos);
-
-        if ((! v.target && v.env <= 0.0f) || index + 1 >= samples.size())
+        auto& h = hazard[index (slot)];
+        auto& p = published[index (slot)][index (takeIndex)];
+        for (int attempt = 0; attempt < 8; ++attempt)
         {
-            v.active = false;
-            v.env = 0.0f;
-            return 0.0f;
+            const TakeBuffer* candidate = p.load (std::memory_order_seq_cst);
+            if (candidate == nullptr) { h.store (nullptr, std::memory_order_seq_cst); return nullptr; }
+            h.store (candidate, std::memory_order_seq_cst);
+            if (p.load (std::memory_order_seq_cst) == candidate) return candidate;
         }
+        h.store (nullptr, std::memory_order_seq_cst);
+        return nullptr;
+    }
 
-        const auto frac = static_cast<float> (v.pos - static_cast<double> (index));
-        const float sample = samples[index] + (samples[index + 1] - samples[index]) * frac;
-        v.pos += v.buffer->sampleRate / hostSampleRate;
+    [[nodiscard]] static float processVoice (Voice& v, double rate) noexcept
+    {
+        if (v.buffer == nullptr || v.buffer->samples.size() < 2) { v.active = false; v.env = 0.0f; return 0.0f; }
+        const float ramp = static_cast<float> (1.0 / (kFadeSeconds * rate));
+        v.env = v.target ? (v.env + ramp > 1.0f ? 1.0f : v.env + ramp)
+                         : (v.env - ramp < 0.0f ? 0.0f : v.env - ramp);
+        const auto& samples = v.buffer->samples;
+        const auto i = static_cast<std::size_t> (v.pos);
+        if ((! v.target && v.env <= 0.0f) || i + 1 >= samples.size())
+        { v.active = false; v.env = 0.0f; return 0.0f; }
+        const float frac = static_cast<float> (v.pos - static_cast<double> (i));
+        const float sample = samples[i] + (samples[i + 1] - samples[i]) * frac;
+        v.pos += v.buffer->sampleRate / rate;
         return sample * v.env;
     }
 
-    [[nodiscard]] static constexpr bool isValidSlot (int slot) noexcept { return slot >= 0 && slot < kSlots; }
-    [[nodiscard]] static constexpr std::size_t idx (int slot) noexcept { return static_cast<std::size_t> (slot); }
+    [[nodiscard]] static constexpr bool validSlot (int s) noexcept { return s >= 0 && s < kSlots; }
+    [[nodiscard]] static constexpr bool validTake (int t) noexcept { return t >= 0 && t < kMaxTakesPerTrack; }
+    [[nodiscard]] static constexpr std::size_t index (int n) noexcept { return static_cast<std::size_t> (n); }
 
-    std::array<std::atomic<const TakeBuffer*>, kSlots> published {};
+    std::array<std::array<std::atomic<const TakeBuffer*>, kMaxTakesPerTrack>, kSlots> published {};
     std::array<std::atomic<const TakeBuffer*>, kSlots> hazard {};
-    std::array<int, kSlots> barMasks {};
-    std::array<int, kSlots> startSteps = [] { std::array<int, kSlots> a {}; a.fill (-1); return a; }();
+    std::array<std::array<Region, kMaxRegionsPerSlot>, kSlots> regions {};
     std::array<Voice, kSlots> voices {};
 };
-
 } // namespace mf
