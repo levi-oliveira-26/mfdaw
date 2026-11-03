@@ -206,6 +206,24 @@ void PlaylistComponent::handleAsyncUpdate()
     const int previousCount = rows.size();
     rebuildRows();
 
+    // Evita manter uma seleção apontando para faixa/clipe removido ou substituído.
+    bool selectionExists = false;
+    if (selectedClipTrackId >= 0 && state.indexOfTrack (selectedClipTrackId) >= 0)
+        for (const auto& clip : state.getClips (selectedClipTrackId))
+            if (clip.id == selectedClipId)
+            {
+                selectionExists = true;
+                break;
+            }
+
+    if (! selectionExists && selectedClipId >= 0)
+    {
+        selectedClipTrackId = -1;
+        selectedClipId = -1;
+        if (onClipSelected)
+            onClipSelected (-1, -1);
+    }
+
     // Faixa nova => rola até ela.
     if (rows.size() > previousCount)
         viewport.setViewPosition (0, juce::jmax (0, rowsHolder.getHeight() - viewport.getHeight()));
