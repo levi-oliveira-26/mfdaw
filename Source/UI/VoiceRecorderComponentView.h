@@ -20,6 +20,8 @@ public:
 
     /** Faixa de Voz exibida/alvo da gravação (-1 = nenhuma). */
     void setTrackId (int newTrackId);
+    /** Clipe selecionado na Playlist que receberá o take escolhido. */
+    void setSelectedClip (int selectedTrackId, int clipId);
 
 private:
     void timerCallback() override;
@@ -30,6 +32,9 @@ private:
     int trackId { -1 };
     std::vector<TakeData> takes;       // mais recente primeiro
     int activeTakeId { -1 };
+    int selectedClipTrackId { -1 };
+    int selectedClipId { -1 };
+    int selectedClipTakeId { -1 };
     juce::Rectangle<int> takesArea;
 
     MainProcessor& engine;
