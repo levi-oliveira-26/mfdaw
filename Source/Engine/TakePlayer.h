@@ -81,8 +81,8 @@ public:
                 if (r.startStep >= 0 && absoluteStep >= r.startStep && absoluteStep < r.endStep)
                 { match = &r; break; }
 
-            if (match == nullptr) { voice.target = false; continue; }
-            if (absoluteStep != match->startStep) continue;
+            if (match == nullptr) { voice.target = false; voice.lastStartedRegionStartStep = -1; continue; }
+            if (absoluteStep != match->startStep && voice.lastStartedRegionStartStep == match->startStep) continue;
 
             const TakeBuffer* buffer = acquireBuffer (s, match->takeIndex);
             if (buffer == nullptr || buffer->samples.size() < 2 || buffer->sampleRate <= 0.0)
@@ -95,6 +95,7 @@ public:
             }
 
             voice.buffer = buffer;
+            voice.lastStartedRegionStartStep = match->startStep;
             voice.pos = 0.0;
             voice.env = 0.0f;
             voice.target = true;
@@ -128,7 +129,7 @@ public:
     }
 
 private:
-    struct Voice { const TakeBuffer* buffer { nullptr }; double pos { 0.0 }; float env { 0.0f }; bool target { false }; bool active { false }; };
+    struct Voice { const TakeBuffer* buffer { nullptr }; double pos { 0.0 }; float env { 0.0f }; int lastStartedRegionStartStep { -1 }; bool target { false }; bool active { false }; };
 
     [[nodiscard]] const TakeBuffer* acquireBuffer (int slot, int takeIndex) noexcept
     {
