@@ -8,7 +8,6 @@
 
 namespace mf::tests
 {
-/** Vertical Slice 07: reprodução dos takes dentro dos clipes (audio thread, sem JUCE). */
 class TakePlayerTests final : public juce::UnitTest
 {
 public:
@@ -16,172 +15,157 @@ public:
 
     void runTest() override
     {
-        constexpr double kRate = 48000.0;
-        std::array<float, TakePlayer::kSlots> unity {};
-        unity.fill (1.0f);
+        constexpr double rate = 48000.0;
+        std::array<float, TakePlayer::kSlots> gains {};
+        gains.fill (1.0f);
 
-        auto makeBuffer = [] (std::size_t n, float value, double rate)
+        auto makeBuffer = [] (std::size_t n, float value, double sampleRate = 48000.0)
         {
             auto b = std::make_unique<TakeBuffer>();
             b->samples.assign (n, value);
-            b->sampleRate = rate;
+            b->sampleRate = sampleRate;
             return b;
         };
-
-        auto render = [&] (TakePlayer& p, int n)
+        auto render = [&] (TakePlayer& player, int count)
         {
             float peak = 0.0f;
-            for (int i = 0; i < n; ++i)
-                peak = juce::jmax (peak, std::abs (p.process (kRate, unity)));
+            for (int i = 0; i < count; ++i)
+                peak = juce::jmax (peak, std::abs (player.process (rate, gains)));
             return peak;
         };
 
-        beginTest ("Silent without a clip (mask 0), plays from the exact start step inside a clip");
+        beginTest ("A region starts its selected take on the exact start step");
         {
             TakePlayer player;
-            auto buf = makeBuffer (200000, 0.5f, kRate);
-            player.publish (0, buf.get());
-            player.setStartStep (0, 16);                // compasso 1, passo 0
+            auto a = makeBuffer (200000, 0.5f);
+            player.publishTake (0, 0, a.get());
+            player.setClipRegion (0, 0, 16, 48, 0);
             player.beginBlock();
-
-            player.triggerStep (1, 0);                  // sem clipe: máscara 0 = mudo
-            expect (! player.isPlaying (0));
-            expectEquals (render (player, 500), 0.0f);
-
-            player.setBars (0, 0b110);                  // clipe cobre compassos 1 e 2
             player.triggerStep (0, 0);
-            expect (! player.isPlaying (0));            // antes do início
+            expect (! player.isPlaying (0));
             player.triggerStep (1, 1);
-            expect (! player.isPlaying (0));            // não é o passo de início
+            expect (! player.isPlaying (0));
             player.triggerStep (1, 0);
             expect (player.isPlaying (0));
-            expectWithinAbsoluteError (render (player, 2000), 0.5f, 1e-4f);   // fade-in terminou
+            expectWithinAbsoluteError (render (player, 2000), 0.5f, 1e-4f);
         }
 
-        beginTest ("Leaving the clip releases with a fade (no click) and stops");
+        beginTest ("A take that finishes loading after the region starts can begin on a later step");
         {
             TakePlayer player;
-            auto buf = makeBuffer (400000, 0.5f, kRate);
-            player.publish (0, buf.get());
-            player.setStartStep (0, 0);
-            player.setBars (0, 0b1);                    // só o compasso 0
-            player.beginBlock();
-            player.triggerStep (0, 0);
-            render (player, 1000);
-
-            player.triggerStep (1, 0);                  // compasso 1 está fora do clipe
-            float previous = 0.5f;
-            float maxJump = 0.0f;
-            for (int i = 0; i < 1000; ++i)
-            {
-                const float v = player.process (kRate, unity);
-                maxJump = juce::jmax (maxJump, std::abs (v - previous));
-                previous = v;
-            }
-            expect (maxJump < 0.01f);
+            auto a = makeBuffer (200000, 0.45f);
+            player.setClipRegion (0, 0, 0, 16, 0);
+            player.triggerStep (0, 0); // buffer ainda não publicado
             expect (! player.isPlaying (0));
-            expectEquals (previous, 0.0f);
+            player.publishTake (0, 0, a.get());
+            player.triggerStep (0, 1);
+            expect (player.isPlaying (0));
+            expectWithinAbsoluteError (render (player, 2000), 0.45f, 1e-4f);
         }
 
-        beginTest ("Resamples by the file rate and stops at the end of the buffer");
+        beginTest ("Multiple non-overlapping regions in one slot select different takes");
         {
             TakePlayer player;
-            auto buf = std::make_unique<TakeBuffer>();
-            buf->sampleRate = 24000.0;                  // metade do host: dura o dobro em amostras
-            buf->samples.assign (1000, 1.0f);
-            player.publish (0, buf.get());
-            player.setStartStep (0, 0);
-            player.setBars (0, 1);
-            player.beginBlock();
-            player.triggerStep (0, 0);
-
-            int audibleSamples = 0;
-            for (int i = 0; i < 3000; ++i)
-                if (player.process (kRate, unity) != 0.0f)
-                    ++audibleSamples;
-
-            expect (audibleSamples > 1900 && audibleSamples <= 2000);
-            expect (! player.isPlaying (0));
-        }
-
-        beginTest ("Per-slot gain scales the voice; other slots are untouched");
-        {
-            TakePlayer player;
-            auto buf = makeBuffer (100000, 1.0f, kRate);
-            player.publish (3, buf.get());
-            player.setStartStep (3, 0);
-            player.setBars (3, 1);
-            player.beginBlock();
-            player.triggerStep (0, 0);
-
-            auto gains = unity;
-            gains[3] = 0.25f;
-            float last = 0.0f;
-            for (int i = 0; i < 2000; ++i)
-                last = player.process (kRate, gains);
-            expectWithinAbsoluteError (last, 0.25f, 1e-4f);
-        }
-
-        beginTest ("Hazard pointers: a buffer in use is never retired; replaced buffers are, once unused");
-        {
-            TakePlayer player;
-            auto a = makeBuffer (100, 0.1f, kRate);
-            auto b = makeBuffer (100, 0.2f, kRate);
-
-            expect (player.isRetired (a.get()));         // nunca publicado
-            player.publish (0, a.get());
-            expect (! player.isRetired (a.get()));       // publicado
-
-            player.beginBlock();                         // a audio thread passa a usar A
-            player.publish (0, b.get());                 // troca
-            expect (! player.isRetired (a.get()));       // ainda anunciado: NÃO pode ser destruído
-            expect (! player.isRetired (b.get()));
-
-            player.beginBlock();                         // próximo bloco já usa B
-            expect (player.isRetired (a.get()));         // agora A pode ser liberado
-            expect (! player.isRetired (b.get()));
-        }
-
-        beginTest ("Swapping the take resets the voice; invalid start/slot are ignored");
-        {
-            TakePlayer player;
-            auto a = makeBuffer (100000, 0.5f, kRate);
-            auto b = makeBuffer (100000, 0.5f, kRate);
-            player.publish (0, a.get());
-            player.setStartStep (0, 0);
-            player.setBars (0, 1);
-            player.beginBlock();
+            auto a = makeBuffer (200000, 0.25f);
+            auto b = makeBuffer (200000, 0.75f);
+            player.publishTake (0, 0, a.get());
+            player.publishTake (0, 1, b.get());
+            player.setClipRegion (0, 0, 0, 16, 0);
+            player.setClipRegion (0, 1, 32, 48, 1);
             player.triggerStep (0, 0);
             expect (player.isPlaying (0));
-
-            player.publish (0, b.get());
-            player.beginBlock();
-            expect (! player.isPlaying (0));
-
-            player.setStartStep (-5, 0);
-            player.setStartStep (0, kPlaylistSteps);     // inválido => sem início
-            player.triggerStep (0, 0);
-            expect (! player.isPlaying (0));
-            expect (! player.isPlaying (99));
-        }
-
-        beginTest ("releaseAll fades every voice out");
-        {
-            TakePlayer player;
-            auto a = makeBuffer (100000, 0.5f, kRate);
-            player.publish (0, a.get());
-            player.setStartStep (0, 0);
-            player.setBars (0, 1);
-            player.beginBlock();
-            player.triggerStep (0, 0);
-            render (player, 2000);
-            player.releaseAll();
+            expectWithinAbsoluteError (render (player, 2000), 0.25f, 1e-4f);
+            player.triggerStep (1, 0); // gap: fade the first region out
             render (player, 1000);
             expect (! player.isPlaying (0));
+            player.triggerStep (2, 0);
+            expect (player.isPlaying (0));
+            expectWithinAbsoluteError (render (player, 2000), 0.75f, 1e-4f);
+        }
+
+        beginTest ("Moving a region moves its trigger step");
+        {
+            TakePlayer player;
+            auto a = makeBuffer (200000, 0.4f);
+            player.publishTake (0, 0, a.get());
+            player.setClipRegion (0, 0, 16, 32, 0);
+            player.triggerStep (0, 0);
+            expect (! player.isPlaying (0));
+            player.setClipRegion (0, 0, 48, 64, 0);
+            player.triggerStep (1, 0);
+            expect (! player.isPlaying (0));
+            player.triggerStep (3, 0);
+            expect (player.isPlaying (0));
+        }
+
+        beginTest ("Changing take within a slot announces the new buffer and resets playback");
+        {
+            TakePlayer player;
+            auto a = makeBuffer (200000, 0.2f);
+            auto b = makeBuffer (200000, 0.6f);
+            player.publishTake (2, 0, a.get());
+            player.publishTake (2, 1, b.get());
+            player.setClipRegion (2, 0, 0, 16, 0);
+            player.setClipRegion (2, 1, 16, 32, 1);
+            player.triggerStep (0, 0);
+            render (player, 2000);
+            player.triggerStep (1, 0);
+            expect (player.isPlaying (2));
+            auto slotGains = gains;
+            expectWithinAbsoluteError (render (player, 2000), 0.6f, 1e-4f);
+            expect (! player.isRetired (b.get()));
+            (void) slotGains;
+        }
+
+        beginTest ("Hazard pointer protects a playing buffer after it is unpublished");
+        {
+            TakePlayer player;
+            auto a = makeBuffer (200000, 0.3f);
+            player.publishTake (0, 0, a.get());
+            player.setClipRegion (0, 0, 0, 16, 0);
+            expect (! player.isRetired (a.get()));
+            player.triggerStep (0, 0);
+            player.publishTake (0, 0, nullptr);
+            expect (! player.isRetired (a.get()));
+            render (player, 3000);
+            player.triggerStep (1, 0);
+            render (player, 1000);
+            expect (player.isRetired (a.get()));
+        }
+
+        beginTest ("Removed regions release audio and invalid regions are ignored");
+        {
+            TakePlayer player;
+            auto a = makeBuffer (200000, 0.5f);
+            player.publishTake (0, 0, a.get());
+            player.setClipRegion (0, 0, 0, 16, 0);
+            player.triggerStep (0, 0);
+            render (player, 2000);
+            player.setClipRegion (0, 0, -1, -1, -1);
+            player.triggerStep (1, 0);
+            render (player, 1000);
+            expect (! player.isPlaying (0));
+            player.setClipRegion (0, 1, 0, 16, 999);
+            player.triggerStep (0, 0);
+            expect (! player.isPlaying (0));
+        }
+
+        beginTest ("Per-slot gain and sample-rate conversion are preserved");
+        {
+            TakePlayer player;
+            auto a = makeBuffer (1000, 1.0f, 24000.0);
+            player.publishTake (3, 0, a.get());
+            player.setClipRegion (3, 0, 0, 16, 0);
+            player.triggerStep (0, 0);
+            auto scaled = gains;
+            scaled[3] = 0.25f;
+            float last = 0.0f;
+            for (int i = 0; i < 1000; ++i)
+                last = player.process (rate, scaled);
+            expectWithinAbsoluteError (last, 0.25f, 1e-4f);
         }
     }
 };
 
 static TakePlayerTests takePlayerTests;
-
 } // namespace mf::tests

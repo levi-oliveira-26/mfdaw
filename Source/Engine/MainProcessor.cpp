@@ -11,6 +11,28 @@
 
 namespace mf
 {
+class MainProcessor::TakeLoadJob final : public juce::ThreadPoolJob
+{
+public:
+    TakeLoadJob (MainProcessor& ownerIn, int slotIn, int takeIndexIn, int generationIn, juce::String pathIn)
+        : juce::ThreadPoolJob ("M.F. DAW take loader"), owner (ownerIn), slot (slotIn),
+          takeIndex (takeIndexIn), generation (generationIn), path (std::move (pathIn)) {}
+
+    JobStatus runJob() override
+    {
+        auto buffer = MainProcessor::loadTakeBuffer (path);
+        owner.finishTakeLoad (slot, takeIndex, generation, path, std::move (buffer));
+        return jobHasFinished;
+    }
+
+private:
+    MainProcessor& owner;
+    int slot;
+    int takeIndex;
+    int generation;
+    juce::String path;
+};
+
 // ===========================================================================
 // Construção / destruição  (MESSAGE THREAD)
 // ===========================================================================
@@ -44,10 +66,18 @@ MainProcessor::MainProcessor()
 
     // Sincroniza o motor com o estado inicial do projeto.
     pushFullState();
+    startTimerHz (10); // recolhe buffers aposentados após a audio thread terminar de usá-los
 }
 
 MainProcessor::~MainProcessor()
 {
+    stopTimer();
+    takeLoaderPool.removeAllJobs (true, -1);
+    cancelPendingUpdate();
+    {
+        const juce::ScopedLock lock (takeLoadLock);
+        completedTakeLoads.clear();
+    }
     projectState.getTree().removeListener (this);
     projectState.getSession().removeListener (this);
     takePlayer.releaseAll();
@@ -166,6 +196,7 @@ void MainProcessor::pushArrangementState()
                                     || track->getType() == TrackType::Record);
         post (EngineEvent::setSlotBars (slot, hasPattern ? projectState.getTrackBarMask (track->getId()) : 0));
     }
+    pushClipRegions();
 }
 
 std::shared_ptr<TakeBuffer> MainProcessor::loadTakeBuffer (const juce::String& path)
@@ -208,41 +239,124 @@ void MainProcessor::syncTakes()
     for (int slot = 0; slot < kMaxPlaylistTracks; ++slot)
     {
         const auto track = slot < numTracks ? projectState.getTrackByIndex (slot) : nullptr;
-        const auto index = static_cast<std::size_t> (slot);
-
-        juce::String path;
-        int startStep = -1;
+        const auto slotIndex = static_cast<std::size_t> (slot);
+        const auto takes = track != nullptr && track->getType() == TrackType::Record
+                               ? projectState.getTakes (track->getId()) : std::vector<TakeData> {};
+        std::array<bool, kMaxTakesPerTrack> requiredTakes {};
 
         if (track != nullptr && track->getType() == TrackType::Record)
+            for (const auto& clip : projectState.getClips (track->getId()))
+                for (int i = 0; i < static_cast<int> (takes.size()); ++i)
+                    if (takes[static_cast<std::size_t> (i)].id == clip.takeId)
+                        requiredTakes[static_cast<std::size_t> (i)] = true;
+
+        for (int takeIndex = 0; takeIndex < kMaxTakesPerTrack; ++takeIndex)
         {
-            const int activeId = projectState.getActiveTakeId (track->getId());
-            for (const auto& t : projectState.getTakes (track->getId()))
-                if (t.id == activeId)
-                {
-                    path = t.filePath;
-                    startStep = t.startStep;
-                }
-        }
+            const auto takeIdx = static_cast<std::size_t> (takeIndex);
+            const juce::String path = takeIndex < static_cast<int> (takes.size())
+                                          && requiredTakes[takeIdx]
+                                          ? takes[static_cast<std::size_t> (takeIndex)].filePath : juce::String {};
 
-        if (path != takePaths[index])
-        {
-            takePaths[index] = path;
-            auto fresh = path.isEmpty() ? nullptr : loadTakeBuffer (path);
+            if (path == takePaths[slotIndex][takeIdx])
+                continue;
 
-            auto old = std::move (takeBuffers[index]);
-            takeBuffers[index] = fresh;
-            takePlayer.publish (slot, fresh.get());
+            takePaths[slotIndex][takeIdx] = path;
+            const int generation = ++takeLoadGeneration[slotIndex][takeIdx];
 
+            // Retire the old publication immediately. A clip cannot accidentally
+            // play a previous take while the replacement WAV is still loading.
+            takePlayer.publishTake (slot, takeIndex, nullptr);
+            auto old = std::move (takeBuffers[slotIndex][takeIdx]);
             if (old != nullptr)
-                takeGraveyard.push_back (std::move (old));   // só é destruído quando a audio thread soltar
-        }
+                takeGraveyard.push_back (std::move (old));
 
-        post (EngineEvent::setTakeStart (slot, takeBuffers[index] != nullptr ? startStep : -1));
+            if (path.isNotEmpty())
+                takeLoaderPool.addJob (new TakeLoadJob (*this, slot, takeIndex, generation, path), true);
+        }
+    }
+
+    pushClipRegions();
+    takeGraveyard.erase (std::remove_if (takeGraveyard.begin(), takeGraveyard.end(),
+                                         [this] (const std::shared_ptr<TakeBuffer>& b) { return takePlayer.isRetired (b.get()); }),
+                         takeGraveyard.end());
+}
+
+void MainProcessor::finishTakeLoad (int slot, int takeIndex, int generation, const juce::String& path,
+                                    std::shared_ptr<TakeBuffer> buffer)
+{
+    const juce::ScopedLock lock (takeLoadLock);
+    completedTakeLoads.push_back ({ slot, takeIndex, generation, path, std::move (buffer) });
+    triggerAsyncUpdate();
+}
+
+void MainProcessor::handleAsyncUpdate()
+{
+    std::vector<TakeLoadResult> completed;
+    {
+        const juce::ScopedLock lock (takeLoadLock);
+        completed.swap (completedTakeLoads);
+    }
+
+    for (auto& result : completed)
+    {
+        if (result.slot < 0 || result.slot >= kMaxPlaylistTracks
+            || result.takeIndex < 0 || result.takeIndex >= kMaxTakesPerTrack)
+            continue;
+
+        const auto slot = static_cast<std::size_t> (result.slot);
+        const auto takeIndex = static_cast<std::size_t> (result.takeIndex);
+        if (takeLoadGeneration[slot][takeIndex] != result.generation
+            || takePaths[slot][takeIndex] != result.path)
+            continue; // resultado obsoleto: o projeto mudou durante a leitura
+
+        takeBuffers[slot][takeIndex] = std::move (result.buffer);
+        takePlayer.publishTake (result.slot, result.takeIndex, takeBuffers[slot][takeIndex].get());
     }
 
     takeGraveyard.erase (std::remove_if (takeGraveyard.begin(), takeGraveyard.end(),
                                          [this] (const std::shared_ptr<TakeBuffer>& b) { return takePlayer.isRetired (b.get()); }),
                          takeGraveyard.end());
+}
+void MainProcessor::timerCallback()
+{
+    takeGraveyard.erase (std::remove_if (takeGraveyard.begin(), takeGraveyard.end(),
+                                         [this] (const std::shared_ptr<TakeBuffer>& b) { return takePlayer.isRetired (b.get()); }),
+                         takeGraveyard.end());
+}
+
+void MainProcessor::pushClipRegions()
+{
+    const int numTracks = projectState.getNumTracks();
+    for (int slot = 0; slot < kMaxPlaylistTracks; ++slot)
+    {
+        const auto track = slot < numTracks ? projectState.getTrackByIndex (slot) : nullptr;
+        int regionIndex = 0;
+
+        if (track != nullptr && track->getType() == TrackType::Record)
+        {
+            const auto takes = projectState.getTakes (track->getId());
+            for (const auto& clip : projectState.getClips (track->getId()))
+            {
+                int takeIndex = -1;
+                for (int i = 0; i < static_cast<int> (takes.size()); ++i)
+                    if (takes[static_cast<std::size_t> (i)].id == clip.takeId)
+                    {
+                        takeIndex = i;
+                        break;
+                    }
+
+                const int startStep = clip.startBar * kStepsPerBar;
+                const int endStep = (clip.startBar + clip.lengthBars) * kStepsPerBar;
+                post (EngineEvent::setClipRegion (slot, regionIndex, startStep, endStep, takeIndex));
+                ++regionIndex;
+                if (regionIndex >= TakePlayer::kMaxRegionsPerSlot)
+                    break;
+            }
+        }
+
+        for (; regionIndex < TakePlayer::kMaxRegionsPerSlot; ++regionIndex)
+            post (EngineEvent::setClipRegion (slot, regionIndex, -1, -1, -1));
+    }
 }
 
 void MainProcessor::pushHarmonySlot (int slot)
@@ -370,7 +484,12 @@ void MainProcessor::valueTreePropertyChanged (juce::ValueTree& changedTree, cons
     {
         // Clipe movido / redimensionado (ou desfeito): só interessa a posição.
         if (property == IDs::startBar || property == IDs::lengthBars)
+        {
             pushArrangementState();
+            syncTakes();
+        }
+        else if (property == IDs::takeId)
+            syncTakes();
     }
     else if (changedTree.hasType (IDs::track))
     {
@@ -404,7 +523,11 @@ void MainProcessor::valueTreeChildAdded (juce::ValueTree& parent, juce::ValueTre
         else if (child.hasType (IDs::take))
             syncTakes();
         else
-            pushArrangementState();                       // clipe criado numa faixa
+        {
+            pushArrangementState();
+            if (child.hasType (IDs::clip))
+                syncTakes();
+        }
         return;
     }
 
@@ -428,7 +551,11 @@ void MainProcessor::valueTreeChildRemoved (juce::ValueTree& parent, juce::ValueT
         else if (child.hasType (IDs::take))
             syncTakes();
         else
+        {
             pushArrangementState();
+            if (child.hasType (IDs::clip))
+                syncTakes();
+        }
         return;
     }
 
@@ -562,14 +689,13 @@ void MainProcessor::drainEvents() noexcept
                 melodySequencer.clearNotes (event.a);
                 break;
 
-            case EngineEvent::Type::SetTakeStart:
-                takePlayer.setStartStep (event.a, event.b);
-                break;
-
             case EngineEvent::Type::SetSlotBars:
-                takePlayer.setBars (event.a, event.b);
                 melodySequencer.setBars (event.a, event.b);
                 harmonySequencer.setBars (event.a, event.b);
+                break;
+
+            case EngineEvent::Type::SetClipRegion:
+                takePlayer.setClipRegion (event.a, event.b, event.c, event.d, event.e);
                 break;
 
             case EngineEvent::Type::SetHarmonyChord:
