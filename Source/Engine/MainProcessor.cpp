@@ -11,6 +11,28 @@
 
 namespace mf
 {
+class MainProcessor::TakeLoadJob final : public juce::ThreadPoolJob
+{
+public:
+    TakeLoadJob (MainProcessor& ownerIn, int slotIn, int takeIndexIn, int generationIn, juce::String pathIn)
+        : juce::ThreadPoolJob ("M.F. DAW take loader"), owner (ownerIn), slot (slotIn),
+          takeIndex (takeIndexIn), generation (generationIn), path (std::move (pathIn)) {}
+
+    JobStatus runJob() override
+    {
+        auto buffer = MainProcessor::loadTakeBuffer (path);
+        owner.finishTakeLoad (slot, takeIndex, generation, path, std::move (buffer));
+        return jobHasFinished;
+    }
+
+private:
+    MainProcessor& owner;
+    int slot;
+    int takeIndex;
+    int generation;
+    juce::String path;
+};
+
 // ===========================================================================
 // Construção / destruição  (MESSAGE THREAD)
 // ===========================================================================
@@ -48,6 +70,12 @@ MainProcessor::MainProcessor()
 
 MainProcessor::~MainProcessor()
 {
+    takeLoaderPool.removeAllJobs (true, -1);
+    cancelPendingUpdate();
+    {
+        const juce::ScopedLock lock (takeLoadLock);
+        completedTakeLoads.clear();
+    }
     projectState.getTree().removeListener (this);
     projectState.getSession().removeListener (this);
     takePlayer.releaseAll();
@@ -223,23 +251,62 @@ void MainProcessor::syncTakes()
                 continue;
 
             takePaths[slotIndex][takeIdx] = path;
-            auto fresh = path.isEmpty() ? nullptr : loadTakeBuffer (path);
-            auto old = std::move (takeBuffers[slotIndex][takeIdx]);
-            takeBuffers[slotIndex][takeIdx] = fresh;
-            takePlayer.publishTake (slot, takeIndex, fresh.get());
+            const int generation = ++takeLoadGeneration[slotIndex][takeIdx];
 
+            // Retire the old publication immediately. A clip cannot accidentally
+            // play a previous take while the replacement WAV is still loading.
+            takePlayer.publishTake (slot, takeIndex, nullptr);
+            auto old = std::move (takeBuffers[slotIndex][takeIdx]);
             if (old != nullptr)
                 takeGraveyard.push_back (std::move (old));
+
+            if (path.isNotEmpty())
+                takeLoaderPool.addJob (new TakeLoadJob (*this, slot, takeIndex, generation, path), true);
         }
     }
 
     pushClipRegions();
-
     takeGraveyard.erase (std::remove_if (takeGraveyard.begin(), takeGraveyard.end(),
                                          [this] (const std::shared_ptr<TakeBuffer>& b) { return takePlayer.isRetired (b.get()); }),
                          takeGraveyard.end());
 }
 
+void MainProcessor::finishTakeLoad (int slot, int takeIndex, int generation, const juce::String& path,
+                                    std::shared_ptr<TakeBuffer> buffer)
+{
+    const juce::ScopedLock lock (takeLoadLock);
+    completedTakeLoads.push_back ({ slot, takeIndex, generation, path, std::move (buffer) });
+    triggerAsyncUpdate();
+}
+
+void MainProcessor::handleAsyncUpdate()
+{
+    std::vector<TakeLoadResult> completed;
+    {
+        const juce::ScopedLock lock (takeLoadLock);
+        completed.swap (completedTakeLoads);
+    }
+
+    for (auto& result : completed)
+    {
+        if (result.slot < 0 || result.slot >= kMaxPlaylistTracks
+            || result.takeIndex < 0 || result.takeIndex >= kMaxTakesPerTrack)
+            continue;
+
+        const auto slot = static_cast<std::size_t> (result.slot);
+        const auto takeIndex = static_cast<std::size_t> (result.takeIndex);
+        if (takeLoadGeneration[slot][takeIndex] != result.generation
+            || takePaths[slot][takeIndex] != result.path)
+            continue; // resultado obsoleto: o projeto mudou durante a leitura
+
+        takeBuffers[slot][takeIndex] = std::move (result.buffer);
+        takePlayer.publishTake (result.slot, result.takeIndex, takeBuffers[slot][takeIndex].get());
+    }
+
+    takeGraveyard.erase (std::remove_if (takeGraveyard.begin(), takeGraveyard.end(),
+                                         [this] (const std::shared_ptr<TakeBuffer>& b) { return takePlayer.isRetired (b.get()); }),
+                         takeGraveyard.end());
+}
 void MainProcessor::pushClipRegions()
 {
     const int numTracks = projectState.getNumTracks();
