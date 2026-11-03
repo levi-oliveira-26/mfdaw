@@ -17,6 +17,12 @@ constexpr const char* kDefaultTrackNames[kNumTracks] = {
 
 [[nodiscard]] bool isTrackValid (int track) noexcept { return track >= 0 && track < kNumTracks; }
 
+[[nodiscard]] bool isRecordTrackNode (const juce::ValueTree& trackNode)
+{
+    return trackNode.isValid()
+           && static_cast<int> (trackNode.getProperty (IDs::trackType, -1)) == static_cast<int> (TrackType::Record);
+}
+
 [[nodiscard]] juce::Identifier velocityProperty (int step)
 {
     return juce::Identifier ("velocity" + juce::String (step));
@@ -741,12 +747,6 @@ int ProjectState::getTrackBarMask (int trackId) const
 // ---------------------------------------------------------------------------
 namespace
 {
-bool isRecordTrackNode (const juce::ValueTree& trackNode)
-{
-    return trackNode.isValid()
-           && static_cast<int> (trackNode.getProperty (IDs::trackType, -1)) == static_cast<int> (TrackType::Record);
-}
-
 TakeData readTake (const juce::ValueTree& node)
 {
     return { static_cast<int> (node.getProperty (IDs::takeId, -1)),
