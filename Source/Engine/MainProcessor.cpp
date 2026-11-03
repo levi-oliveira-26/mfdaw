@@ -240,11 +240,19 @@ void MainProcessor::syncTakes()
         const auto slotIndex = static_cast<std::size_t> (slot);
         const auto takes = track != nullptr && track->getType() == TrackType::Record
                                ? projectState.getTakes (track->getId()) : std::vector<TakeData> {};
+        std::array<bool, kMaxTakesPerTrack> requiredTakes {};
+
+        if (track != nullptr && track->getType() == TrackType::Record)
+            for (const auto& clip : projectState.getClips (track->getId()))
+                for (int i = 0; i < static_cast<int> (takes.size()); ++i)
+                    if (takes[static_cast<std::size_t> (i)].id == clip.takeId)
+                        requiredTakes[static_cast<std::size_t> (i)] = true;
 
         for (int takeIndex = 0; takeIndex < kMaxTakesPerTrack; ++takeIndex)
         {
             const auto takeIdx = static_cast<std::size_t> (takeIndex);
             const juce::String path = takeIndex < static_cast<int> (takes.size())
+                                          && requiredTakes[takeIdx]
                                           ? takes[static_cast<std::size_t> (takeIndex)].filePath : juce::String {};
 
             if (path == takePaths[slotIndex][takeIdx])
@@ -467,9 +475,12 @@ void MainProcessor::valueTreePropertyChanged (juce::ValueTree& changedTree, cons
     {
         // Clipe movido / redimensionado (ou desfeito): só interessa a posição.
         if (property == IDs::startBar || property == IDs::lengthBars)
+        {
             pushArrangementState();
+            syncTakes();
+        }
         else if (property == IDs::takeId)
-            pushClipRegions();
+            syncTakes();
     }
     else if (changedTree.hasType (IDs::track))
     {
@@ -503,7 +514,11 @@ void MainProcessor::valueTreeChildAdded (juce::ValueTree& parent, juce::ValueTre
         else if (child.hasType (IDs::take))
             syncTakes();
         else
-            pushArrangementState();                       // clipe criado numa faixa
+        {
+            pushArrangementState();
+            if (child.hasType (IDs::clip))
+                syncTakes();
+        }
         return;
     }
 
@@ -527,7 +542,11 @@ void MainProcessor::valueTreeChildRemoved (juce::ValueTree& parent, juce::ValueT
         else if (child.hasType (IDs::take))
             syncTakes();
         else
+        {
             pushArrangementState();
+            if (child.hasType (IDs::clip))
+                syncTakes();
+        }
         return;
     }
 
