@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <memory>
 #include <tuple>
 
@@ -149,12 +150,12 @@ void TrackRowComponent::refreshTakeVisuals()
         {
             constexpr int kBins = static_cast<int> (std::tuple_size<decltype (visual.peaks)>::value);
             const auto totalSamples = reader->lengthInSamples;
-            const int windowSize = static_cast<int> (juce::jmin<int64> (2048, juce::jmax<int64> (1, totalSamples / kBins)));
+            const int windowSize = static_cast<int> (std::min<std::int64_t> (2048, std::max<std::int64_t> (1, totalSamples / kBins)));
             juce::AudioBuffer<float> window (1, windowSize);
 
             for (int bin = 0; bin < kBins; ++bin)
             {
-                const auto latestStart = juce::jmax<int64> (0, totalSamples - windowSize);
+                const auto latestStart = std::max<std::int64_t> (0, totalSamples - windowSize);
                 const auto startSample = kBins > 1 ? latestStart * bin / (kBins - 1) : 0;
                 window.clear();
                 if (reader->read (&window, 0, windowSize, startSample, true, false))
