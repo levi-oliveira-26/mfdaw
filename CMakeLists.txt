@@ -86,6 +86,7 @@ add_executable(MFDawTests
     Source/Tests/ClipTests.cpp
     Source/Tests/MelodyTests.cpp
     Source/Tests/HarmonyTrackTests.cpp
+    Source/Tests/TakeTests.cpp
     Source/Core/ChordGenerator.cpp
     Source/Core/ScaleLock.cpp
     Source/Core/ProjectState.cpp

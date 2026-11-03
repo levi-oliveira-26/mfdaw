@@ -237,6 +237,7 @@ void MainEditor::updateDetailPanel()
     smartChords.setTrackId (detailOpen && detailAction == TrackAction::OpenSmartChords ? detailTrackId : -1);
     pianoRoll.setVisible (detailOpen && detailAction == TrackAction::OpenPianoRoll);
     pianoRoll.setTrackId (detailOpen && detailAction == TrackAction::OpenPianoRoll ? detailTrackId : -1);
+    voiceRecorder.setTrackId (detailOpen && detailAction == TrackAction::ToggleRecording ? detailTrackId : -1);
     voiceRecorder.setVisible (detailOpen && detailAction == TrackAction::ToggleRecording);
 
     const bool showPlaceholder = detailOpen && detailAction == TrackAction::OpenSampleEditor;

@@ -48,6 +48,8 @@ public:
     void requestStop() noexcept;
     void requestChordPreview (int chordIndex, bool pressed) noexcept;
     void requestNotePreview (int midiNote, bool pressed) noexcept;
+    /** Faixa de Voz que receberá o próximo take (Message Thread). */
+    void setRecordingTarget (int trackId) noexcept;
     void requestRecordingCountIn() noexcept;
     void cancelRecordingCountIn() noexcept;
     [[nodiscard]] int getRecordingCountIn() const noexcept { return recordingCountIn.load (std::memory_order_relaxed); }
@@ -216,7 +218,9 @@ private:
     std::atomic<int> playheadStep { -1 };
     std::atomic<int> currentBar { 0 };
     std::atomic<int> playheadBar { 0 };
-    std::atomic<int> recordingStartBar { 0 };
+    std::atomic<int> recordingStartStep { 0 };      // passo absoluto (compasso*16+passo) do início da gravação
+    std::atomic<int> recordingTargetTrack { -1 };
+    int activeRecordingTrackId { -1 };               // Message Thread
     std::atomic<std::uint32_t> droppedEvents { 0 };
 
     // Gravacao com quatro beats de pre-roll, alinhada ao primeiro passo da

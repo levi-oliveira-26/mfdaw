@@ -106,6 +106,11 @@ void MainProcessor::requestNotePreview (int midiNote, bool pressed) noexcept
         post (EngineEvent::chordNote (midiNote, pressed));
 }
 
+void MainProcessor::setRecordingTarget (int trackId) noexcept
+{
+    recordingTargetTrack.store (trackId, std::memory_order_relaxed);
+}
+
 void MainProcessor::requestRecordingCountIn() noexcept
 {
     recordingStartSignal.store (false, std::memory_order_release);
@@ -238,18 +243,28 @@ void MainProcessor::valueTreePropertyChanged (juce::ValueTree& changedTree, cons
         {
             if (projectState.isRecording())
             {
-                const auto destination = juce::File::getSpecialLocation (juce::File::tempDirectory)
-                                             .getChildFile ("mfdaw-recording.wav");
-                recordingStartBar.store (getCurrentBar(), std::memory_order_relaxed);
+                // Um arquivo por take: gravar de novo nunca sobrescreve o take anterior.
+                const auto takesDir = juce::File::getSpecialLocation (juce::File::userDocumentsDirectory)
+                                          .getChildFile ("M.F. DAW").getChildFile ("Takes");
+                takesDir.createDirectory();
+                const auto destination = takesDir.getChildFile (
+                    "take-" + juce::String::toHexString (juce::Time::currentTimeMillis()) + ".wav");
+                activeRecordingTrackId = recordingTargetTrack.load (std::memory_order_relaxed);
                 audioRecorder->startRecording (destination);
             }
             else
             {
                 audioRecorder->stopRecording();
-                if (audioRecorder->getCurrentFile().existsAsFile())
-                    projectState.addAudioClip ({ audioRecorder->getCurrentFile().getFullPathName(),
-                                                 recordingStartBar.load (std::memory_order_relaxed),
-                                                 audioRecorder->getRecordedSeconds() });
+                const auto file = audioRecorder->getCurrentFile();
+                if (file.existsAsFile())
+                {
+                    const double seconds = audioRecorder->getRecordedSeconds();
+                    const int startStep = juce::jlimit (0, kPlaylistSteps - 1,
+                                                        recordingStartStep.load (std::memory_order_relaxed));
+
+                    if (projectState.addRecordedTake (activeRecordingTrackId, file.getFullPathName(), startStep, seconds) < 0)
+                        projectState.addAudioClip ({ file.getFullPathName(), startStep / kStepsPerBar, seconds });   // sem faixa de Voz: legado
+                }
             }
         }
     }
@@ -704,6 +719,12 @@ void MainProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBu
                 const int scheduledStep = nextStep;
                 const int swingOffset = getSwingOffsetSamples (scheduledStep);
 
+                // Compasso (0-based, com loop) do passo que está sendo agendado: o primeiro
+                // passo 0 depois do Stop é o compasso 0; cada passo 0 seguinte avança um.
+                if (scheduledStep == 0 && hasScheduledSinceStop)
+                    arrangementBar = clip::nextBar (arrangementBar);
+                hasScheduledSinceStop = true;
+
                 if (recordingCountInActive && (scheduledStep % 4) == 0)
                 {
                     if (recordingCountInBeats > 0)
@@ -716,17 +737,13 @@ void MainProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBu
                     }
                     else
                     {
+                        // Posição exata da gravação (passo absoluto na Playlist), publicada ANTES do sinal.
+                        recordingStartStep.store (arrangementBar * kStepsPerBar + scheduledStep, std::memory_order_relaxed);
                         recordingStartSignal.store (true, std::memory_order_release);
                         recordingCountIn.store (0, std::memory_order_relaxed);
                         recordingCountInActive = false;
                     }
                 }
-
-                // Compasso (0-based, com loop) do passo que está sendo agendado: o primeiro
-                // passo 0 depois do Stop é o compasso 0; cada passo 0 seguinte avança um.
-                if (scheduledStep == 0 && hasScheduledSinceStop)
-                    arrangementBar = clip::nextBar (arrangementBar);
-                hasScheduledSinceStop = true;
 
                 if (swingOffset > 0)
                 {

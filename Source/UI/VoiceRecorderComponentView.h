@@ -16,9 +16,21 @@ public:
 
     void paint (juce::Graphics& g) override;
     void resized() override;
+    void mouseDown (const juce::MouseEvent& event) override;
+
+    /** Faixa de Voz exibida/alvo da gravação (-1 = nenhuma). */
+    void setTrackId (int newTrackId);
 
 private:
     void timerCallback() override;
+
+    static constexpr int kTakeRowHeight = 30;
+    [[nodiscard]] int takeRowAt (juce::Point<int> position) const;
+
+    int trackId { -1 };
+    std::vector<TakeData> takes;       // mais recente primeiro
+    int activeTakeId { -1 };
+    juce::Rectangle<int> takesArea;
 
     MainProcessor& engine;
     ProjectState& state;
