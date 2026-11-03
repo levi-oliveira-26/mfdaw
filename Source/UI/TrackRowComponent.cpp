@@ -1,6 +1,10 @@
 #include "UI/TrackRowComponent.h"
 
 #include <cmath>
+#include <memory>
+#include <tuple>
+
+#include <juce_audio_formats/juce_audio_formats.h>
 
 #include "Core/FaderScale.h"
 #include "UI/TrackPresentation.h"
@@ -86,9 +90,95 @@ void TrackRowComponent::refreshFromState()
 
     // Não recarrega no meio de um arrasto: a pré-visualização manda até o mouseUp.
     if (dragMode == DragMode::None)
+    {
         clips = state.getClips (trackId);
+        takes = type == TrackType::Record ? state.getTakes (trackId) : std::vector<TakeData> {};
+        refreshTakeVisuals();
+    }
 
     repaint();
+}
+
+void TrackRowComponent::setSelectedClipId (int clipId)
+{
+    if (selectedClipId == clipId)
+        return;
+
+    selectedClipId = clipId;
+    repaint();
+}
+
+const TrackRowComponent::TakeVisual* TrackRowComponent::findTakeVisual (int takeId) const noexcept
+{
+    for (const auto& visual : takeVisuals)
+        if (visual.id == takeId)
+            return &visual;
+
+    return nullptr;
+}
+
+void TrackRowComponent::refreshTakeVisuals()
+{
+    if (type != TrackType::Record)
+    {
+        takeVisuals.clear();
+        return;
+    }
+
+    for (const auto& clip : clips)
+    {
+        if (clip.takeId < 0 || findTakeVisual (clip.takeId) != nullptr)
+            continue;
+
+        auto takeIt = std::find_if (takes.begin(), takes.end(),
+                                    [&clip] (const TakeData& takeData) { return takeData.id == clip.takeId; });
+        if (takeIt == takes.end())
+            continue;
+
+        TakeVisual visual;
+        visual.id = takeIt->id;
+        visual.filePath = takeIt->filePath;
+        visual.label = "Take " + juce::String (static_cast<int> (std::distance (takes.begin(), takeIt)) + 1);
+
+        juce::AudioFormatManager formats;
+        formats.registerBasicFormats();
+        std::unique_ptr<juce::AudioFormatReader> reader (formats.createReaderFor (juce::File (takeIt->filePath)));
+
+        if (reader != nullptr && reader->lengthInSamples > 0 && reader->numChannels > 0)
+        {
+            constexpr int kBins = static_cast<int> (std::tuple_size<decltype (visual.peaks)>::value);
+            const auto totalSamples = reader->lengthInSamples;
+            const int windowSize = static_cast<int> (juce::jmin<int64> (2048, juce::jmax<int64> (1, totalSamples / kBins)));
+            juce::AudioBuffer<float> window (1, windowSize);
+
+            for (int bin = 0; bin < kBins; ++bin)
+            {
+                const auto latestStart = juce::jmax<int64> (0, totalSamples - windowSize);
+                const auto startSample = kBins > 1 ? latestStart * bin / (kBins - 1) : 0;
+                window.clear();
+                if (reader->read (&window, 0, windowSize, startSample, true, false))
+                {
+                    float peak = 0.0f;
+                    for (int sample = 0; sample < windowSize; ++sample)
+                        peak = juce::jmax (peak, std::abs (window.getSample (0, sample)));
+                    visual.peaks[static_cast<std::size_t> (bin)] = juce::jlimit (0.0f, 1.0f, peak);
+                }
+            }
+        }
+
+        takeVisuals.push_back (std::move (visual));
+    }
+
+    takeVisuals.erase (std::remove_if (takeVisuals.begin(), takeVisuals.end(),
+                                       [this] (const TakeVisual& visual)
+                                       {
+                                           return std::none_of (takes.begin(), takes.end(),
+                                                                [&visual] (const TakeData& t)
+                                                                {
+                                                                    return t.id == visual.id && t.filePath == visual.filePath;
+                                                                });
+                                       }),
+                       takeVisuals.end());
 }
 
 void TrackRowComponent::paint (juce::Graphics& g)
@@ -127,9 +217,45 @@ void TrackRowComponent::paint (juce::Graphics& g)
         g.setColour (col (kBgDeep).withAlpha (0.35f));
         g.fillRect (rect.withLeft (rect.getRight() - 4.0f).reduced (0.0f, 8.0f));
 
-        g.setColour (col (kBgDeep));
-        g.drawText (nameLabel.getText(), rect.reduced (8.0f, 0.0f).withTrimmedRight (6.0f),
-                    juce::Justification::centredLeft, true);
+        if (type == TrackType::Record)
+        {
+            const auto* visual = findTakeVisual (c.takeId);
+            auto labelArea = rect.reduced (6.0f, 4.0f);
+            labelArea = labelArea.removeFromTop (18.0f);
+            g.setColour (col (kBgDeep));
+            g.drawText (visual != nullptr ? visual->label : juce::String ("Sem take"),
+                        labelArea, juce::Justification::centredLeft, true);
+
+            if (visual != nullptr)
+            {
+                auto waveArea = rect.reduced (5.0f, 4.0f).withTrimmedTop (24.0f).withTrimmedBottom (5.0f);
+                const float centreY = waveArea.getCentreY();
+                const float halfHeight = juce::jmax (1.0f, waveArea.getHeight() * 0.48f);
+                const float columnWidth = waveArea.getWidth() / static_cast<float> (visual->peaks.size());
+                g.setColour (col (kBgDeep).withAlpha (0.85f));
+
+                for (std::size_t i = 0; i < visual->peaks.size(); ++i)
+                {
+                    const float amplitude = juce::jmax (0.04f, visual->peaks[i]);
+                    const float barHeight = amplitude * halfHeight;
+                    const float x = waveArea.getX() + static_cast<float> (i) * columnWidth;
+                    g.fillRect (x, centreY - barHeight,
+                                juce::jmax (1.0f, columnWidth - 1.0f), barHeight * 2.0f);
+                }
+            }
+        }
+        else
+        {
+            g.setColour (col (kBgDeep));
+            g.drawText (nameLabel.getText(), rect.reduced (8.0f, 0.0f).withTrimmedRight (6.0f),
+                        juce::Justification::centredLeft, true);
+        }
+
+        if (c.id == selectedClipId)
+        {
+            g.setColour (col (kTextPrimary));
+            g.drawRoundedRectangle (rect.reduced (1.0f), 4.0f, 2.0f);
+        }
     }
 
     g.setColour (col (kBorderSubtle));
@@ -213,6 +339,9 @@ void TrackRowComponent::mouseDown (const juce::MouseEvent& event)
 
     if (! event.mods.isLeftButtonDown())
         return;
+
+    if (onClipSelected)
+        onClipSelected (trackId, hit.id);
 
     dragOriginal = dragPreview = hit;
     dragMode = static_cast<float> (event.x) >= clipBounds (hit).getRight() - static_cast<float> (kResizeHandle)
