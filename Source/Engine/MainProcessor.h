@@ -37,7 +37,8 @@ namespace mf
  */
 class MainProcessor final : public juce::AudioProcessor,
                             private juce::ValueTree::Listener,
-                            private juce::AsyncUpdater
+                            private juce::AsyncUpdater,
+                            private juce::Timer
 {
 public:
     MainProcessor();
@@ -118,6 +119,7 @@ private:
     /** Carrega (se mudou) o take ativo de cada faixa de Voz e o publica para a audio thread. */
     void syncTakes();
     void handleAsyncUpdate() override;
+    void timerCallback() override;
     void finishTakeLoad (int slot, int takeIndex, int generation, const juce::String& path,
                          std::shared_ptr<TakeBuffer> buffer);
     /** WAV -> buffer mono em float (thread de carregamento). nullptr se ilegível ou longo demais. */
