@@ -7,6 +7,7 @@
 #include <juce_data_structures/juce_data_structures.h>
 
 #include "Core/ClipModel.h"
+#include "Core/HarmonyChord.h"
 #include "Core/MelodyNote.h"
 #include "Core/TrackModel.h"
 #include "Core/TrackType.h"
@@ -71,6 +72,9 @@ namespace IDs
     inline const juce::Identifier note          { "NOTE" };
     inline const juce::Identifier noteStep      { "step" };          // 0..15
     inline const juce::Identifier notePitch     { "pitch" };         // MIDI 24..107
+
+    // --- Harmonia por faixa (propriedade do PLAYLIST_TRACK do tipo Harmony) ---
+    inline const juce::Identifier chordMask     { "chordMask" };     // bit n = cartão n ligado (ausente = todos)
 
     // --- Voz / clips de audio ---
     inline const juce::Identifier voiceTracks { "VOICE_TRACKS" };
@@ -178,6 +182,14 @@ public:
     [[nodiscard]] std::vector<ClipData> getClips (int trackId) const;
     /** Máscara de compassos (bit n = compasso n) coberta pelos clipes de UMA faixa; 0 = sem clipes. */
     [[nodiscard]] int getTrackBarMask (int trackId) const;
+
+    // --- Harmonia (Slice 05) ---
+    // Máscara dos cartões dos Smart Chords ligados na faixa (bit n = cartão n; padrão: todos).
+    // 0 para faixas inexistentes ou que não são de Harmonia.
+    [[nodiscard]] int getHarmonyArmedMask (int trackId) const;
+    /** Liga/desliga um cartão. Falha (false) se a faixa não é de Harmonia ou o cartão é inválido.
+     *  Idempotente. Cada chamada efetiva é UM passo de undo. */
+    bool setHarmonyCardArmed (int trackId, int card, bool armed);
 
     // --- Notas de Melodia (Slice 04) ---
     // Só faixas do tipo Melody aceitam notas. Idempotente: ligar uma nota já ligada

@@ -11,6 +11,7 @@
 #include "Engine/DrumVoice.h"
 #include "Engine/AudioRecorder.h"
 #include "Engine/EngineEvent.h"
+#include "Engine/HarmonySequencer.h"
 #include "Engine/MelodySequencer.h"
 #include "Engine/SampleManager.h"
 
@@ -102,6 +103,10 @@ private:
     void pushArrangementState();
     /** Reenvia notas + compassos de TODOS os slots de Melodia (e limpa os demais). */
     void pushMelodyState();
+    /** Reenvia os 4 cartões (armado + notas da tonalidade atual) de TODOS os slots. */
+    void pushHarmonyState();
+    /** Reenvia os cartões de UM slot (cartão ligado/desligado pelo usuário). */
+    void pushHarmonySlot (int slot);
     /** Uma nota de Melodia entrou/saiu da árvore: envia só essa mudança ao slot da faixa. */
     void postMelodyNoteChange (const juce::ValueTree& trackNode, const juce::ValueTree& noteNode, bool on);
 
@@ -115,6 +120,10 @@ private:
     void triggerMelodyStep (int step, int bar) noexcept;
     /** Solta as notas de Melodia que ainda soam (fim do passo / pause / stop). */
     void releaseMelodyVoices() noexcept;
+    /** Início de compasso: o acorde do compasso soa (slots de Harmonia audíveis e com o cartão ligado). */
+    void triggerHarmonyBar (int bar) noexcept;
+    /** Solta os acordes que ainda soam (fim do compasso / pause / stop). */
+    void releaseHarmonyVoices() noexcept;
     /** Dispara o passo (voz + nota MIDI) se a bateria estiver audível no compasso do passo. */
     void triggerStepInBar (int step, int bar, int sampleOffset, juce::MidiBuffer& midi) noexcept;
     [[nodiscard]] int getSwingOffsetSamples (int step) const noexcept;
@@ -183,6 +192,24 @@ private:
     MelodySequencer melodySequencer;
     std::array<MelodyVoice, kNumMelodyVoices> melodyVoices {};
     std::size_t melodyStealIndex { 0 };
+    // Harmonia por faixa (Slice 05): acordes sustentados por compasso.
+    HarmonySequencer harmonySequencer;
+    std::array<MelodyVoice, kNumMelodyVoices> harmonyVoices {};
+    std::size_t harmonyStealIndex { 0 };
+
+    /** Voz livre do pool; sem nenhuma, rouba em rodízio (sem alocar). */
+    template <std::size_t N>
+    [[nodiscard]] static MelodyVoice& allocateVoice (std::array<MelodyVoice, N>& pool, std::size_t& stealIndex) noexcept
+    {
+        for (auto& voice : pool)
+            if (voice.note < 0)
+                return voice;
+
+        auto& stolen = pool[stealIndex];
+        stealIndex = (stealIndex + 1) % pool.size();
+        return stolen;
+    }
+
     std::array<float, kMaxPlaylistTracks> slotGainSmoothed {};   // ganho suavizado por slot (preenchido no ctor)
 
     // Canal Audio -> UI.
