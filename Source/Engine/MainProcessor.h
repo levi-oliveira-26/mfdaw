@@ -105,6 +105,8 @@ private:
     void pushPlaylistState();
     /** Reenvia a máscara de compassos da Bateria e de cada faixa de Melodia (clipes mudaram). */
     void pushArrangementState();
+    /** Reenvia a tabela de regiões clipe -> take para todos os slots. */
+    void pushClipRegions();
     /** Reenvia notas + compassos de TODOS os slots de Melodia (e limpa os demais). */
     void pushMelodyState();
     /** Reenvia os 4 cartões (armado + notas da tonalidade atual) de TODOS os slots. */
@@ -218,13 +220,13 @@ private:
         return stolen;
     }
 
-    // Takes de voz (Slice 07). Os buffers pertencem à message thread; a audio thread só
-    // lê ponteiros publicados no TakePlayer (hazard pointer) e nunca libera nada.
+    // Takes de voz (Slice 08b). Até 32 buffers por faixa, publicados por índice.
+    // A audio thread só lê ponteiros do TakePlayer e nunca libera memória.
     static constexpr double kMaxPlayableTakeSeconds = 600.0;
     TakePlayer takePlayer;
-    std::array<std::shared_ptr<TakeBuffer>, kMaxPlaylistTracks> takeBuffers {};   // message thread
-    std::array<juce::String, kMaxPlaylistTracks> takePaths {};                    // message thread
-    std::vector<std::shared_ptr<TakeBuffer>> takeGraveyard;                       // message thread
+    std::array<std::array<std::shared_ptr<TakeBuffer>, kMaxTakesPerTrack>, kMaxPlaylistTracks> takeBuffers {}; // message thread
+    std::array<std::array<juce::String, kMaxTakesPerTrack>, kMaxPlaylistTracks> takePaths {}; // message thread
+    std::vector<std::shared_ptr<TakeBuffer>> takeGraveyard; // message thread
 
     std::array<float, kMaxPlaylistTracks> slotGainSmoothed {};   // ganho suavizado por slot (preenchido no ctor)
 
