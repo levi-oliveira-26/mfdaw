@@ -34,12 +34,14 @@ struct EngineEvent
     enum class Type : std::uint8_t { SetBpm, SetPlaying, SetTrackMask, SetStepVelocity, ChordNote,
                                      SetTrackType, SetTrackGain, SetDrumBars,
                                      SetMelodyNote, SetMelodyClear, SetSlotBars, SetHarmonyChord,
-                                     SetTakeStart };
+                                     SetTakeStart, SetClipRegion };
 
     Type type { Type::SetBpm };
     std::int32_t a { 0 };
     std::int32_t b { 0 };
-    std::int32_t c { 0 };\n    std::int32_t d { 0 };\n    std::int32_t e { 0 };
+    std::int32_t c { 0 };
+    std::int32_t d { 0 };
+    std::int32_t e { 0 };
 
     [[nodiscard]] static EngineEvent setBpm (int bpm) noexcept       { return { Type::SetBpm, bpm, 0 }; }
     [[nodiscard]] static EngineEvent setPlaying (bool on) noexcept   { return { Type::SetPlaying, on ? 1 : 0, 0 }; }
