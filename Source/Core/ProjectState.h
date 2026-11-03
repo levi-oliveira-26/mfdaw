@@ -57,6 +57,11 @@ namespace IDs
     inline const juce::Identifier sampleRate { "sampleRate" };
     inline const juce::Identifier bitDepth   { "bitDepth" };
     inline const juce::Identifier swing      { "swing" };
+    inline const juce::Identifier masterGain { "masterGain" };
+    inline const juce::Identifier masterMuted { "masterMuted" };
+    inline const juce::Identifier masterSolo { "masterSolo" };
+    inline const juce::Identifier masterBrightness { "masterBrightness" };
+    inline const juce::Identifier masterSpace { "masterSpace" };
     inline const juce::Identifier formatVersion { "formatVersion" };
     inline const juce::Identifier sequencer  { "SEQUENCER" };
     inline const juce::Identifier harmony    { "HARMONY" };
@@ -164,6 +169,18 @@ public:
     }
 
     void setSwingAmount (float newAmount);
+
+    // --- Mixer Master (Card 5.1) ---
+    [[nodiscard]] float getMasterGain() const noexcept { return masterGain.load (std::memory_order_acquire); }
+    [[nodiscard]] bool isMasterMuted() const noexcept { return masterMuted.load (std::memory_order_acquire); }
+    [[nodiscard]] bool isMasterSolo() const noexcept { return masterSolo.load (std::memory_order_acquire); }
+    [[nodiscard]] float getMasterBrightness() const noexcept { return masterBrightness.load (std::memory_order_acquire); }
+    [[nodiscard]] float getMasterSpace() const noexcept { return masterSpace.load (std::memory_order_acquire); }
+    void setMasterGain (float gain);
+    void setMasterMuted (bool muted);
+    void setMasterSolo (bool solo);
+    void setMasterBrightness (float brightness);
+    void setMasterSpace (float space);
 
     // --- Step sequencer (Card 1.1) ---
     [[nodiscard]] juce::String getTrackName (int track) const;
@@ -298,6 +315,11 @@ private:
     juce::UndoManager undoManager;
     std::atomic<bool> modified { false };
     std::atomic<float> swingAmount { 0.0f };
+    std::atomic<float> masterGain { 1.0f };
+    std::atomic<bool> masterMuted { false };
+    std::atomic<bool> masterSolo { false };
+    std::atomic<float> masterBrightness { 0.5f };
+    std::atomic<float> masterSpace { 0.0f };
 };
 
 } // namespace mf

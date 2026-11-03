@@ -66,6 +66,11 @@ MainProcessor::MainProcessor()
     projectState.getSession().addListener (this);
 
     // Sincroniza o motor com o estado inicial do projeto.
+    masterGain.store (projectState.getMasterGain(), std::memory_order_release);
+    masterMuted.store (projectState.isMasterMuted(), std::memory_order_release);
+    masterSolo.store (projectState.isMasterSolo(), std::memory_order_release);
+    masterBrightness.store (projectState.getMasterBrightness(), std::memory_order_release);
+    masterSpace.store (projectState.getMasterSpace(), std::memory_order_release);
     pushFullState();
     startTimerHz (10); // recolhe buffers aposentados após a audio thread terminar de usá-los
 }
@@ -427,6 +432,20 @@ void MainProcessor::valueTreePropertyChanged (juce::ValueTree& changedTree, cons
 {
     if (changedTree == projectState.getTree())
     {
+        if (property == IDs::masterGain)
+            masterGain.store (projectState.getMasterGain(), std::memory_order_release);
+        else if (property == IDs::masterMuted)
+            masterMuted.store (projectState.isMasterMuted(), std::memory_order_release);
+        else if (property == IDs::masterSolo)
+            masterSolo.store (projectState.isMasterSolo(), std::memory_order_release);
+        else if (property == IDs::masterBrightness)
+            masterBrightness.store (projectState.getMasterBrightness(), std::memory_order_release);
+        else if (property == IDs::masterSpace)
+            masterSpace.store (projectState.getMasterSpace(), std::memory_order_release);
+    }
+
+    if (changedTree == projectState.getTree())
+    {
         if (property == IDs::bpm)
             post (EngineEvent::setBpm (projectState.getBpm()));
         else if (property == IDs::keyRoot || property == IDs::scale)
@@ -577,19 +596,38 @@ void MainProcessor::postMelodyNoteChange (const juce::ValueTree& trackNode, cons
 
 void MainProcessor::valueTreeRedirected (juce::ValueTree&)
 {
+    masterGain.store (projectState.getMasterGain(), std::memory_order_release);
+    masterMuted.store (projectState.isMasterMuted(), std::memory_order_release);
+    masterSolo.store (projectState.isMasterSolo(), std::memory_order_release);
+    masterBrightness.store (projectState.getMasterBrightness(), std::memory_order_release);
+    masterSpace.store (projectState.getMasterSpace(), std::memory_order_release);
     pushFullState();
 }
 
 // ===========================================================================
 // Ciclo de vida do áudio
 // ===========================================================================
-void MainProcessor::prepareToPlay (double newSampleRate, int /*samplesPerBlock*/)
+void MainProcessor::prepareToPlay (double newSampleRate, int samplesPerBlock)
 {
     sampleRate = newSampleRate > 0.0 ? newSampleRate : 44100.0;
     audioRecorder->prepare (sampleRate, 0);
 
     for (auto& voice : voices)
         voice.prepare (sampleRate);
+
+    masterEqLowState.fill (0.0f);
+    masterEqHighState.fill (0.0f);
+
+    juce::dsp::Reverb::Parameters reverbParams;
+    reverbParams.roomSize = 0.25f;
+    reverbParams.damping = 0.5f;
+    reverbParams.wetLevel = 0.0f;
+    reverbParams.dryLevel = 1.0f;
+    reverbParams.width = 1.0f;
+    masterReverb.setParameters (reverbParams);
+    masterReverb.prepare ({ sampleRate,
+                            static_cast<juce::uint32> (juce::jmax (1, samplesPerBlock)),
+                            static_cast<juce::uint32> (juce::jmax (1, getMainBusNumOutputChannels())) });
 
     recomputeTiming();
 }
@@ -1070,12 +1108,52 @@ void MainProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBu
 
         const float takeMix = takePlayer.process (sampleRate, slotGainSmoothed);
 
-        const float mix = std::clamp ((drumMix * drumGainSmoothed + previewMix * previewGainSmoothed
-                                       + melodyMix + harmonyMix + takeMix) * kMasterGain,
-                                      -1.0f, 1.0f);
+        float mix = std::clamp ((drumMix * drumGainSmoothed + previewMix * previewGainSmoothed
+                                 + melodyMix + harmonyMix + takeMix) * kMasterGain,
+                                -1.0f, 1.0f);
 
-        for (int ch = 0; ch < numChannels; ++ch)
-            buffer.setSample (ch, i, mix);
+        const bool muted = masterMuted.load (std::memory_order_acquire)
+                           && ! masterSolo.load (std::memory_order_acquire);
+        if (muted)
+            mix = 0.0f;
+
+        for (int ch = 0; ch < juce::jmin (numChannels, 2); ++ch)
+        {
+            const float lowCoefficient = juce::jlimit (0.001f, 0.999f,
+                                                       1.0f / (1.0f + static_cast<float> (sampleRate) / 150.0f));
+            const float highCoefficient = juce::jlimit (0.001f, 0.999f,
+                                                        1.0f / (1.0f + static_cast<float> (sampleRate) / 3500.0f));
+
+            masterEqLowState[static_cast<std::size_t> (ch)]
+                += lowCoefficient * (mix - masterEqLowState[static_cast<std::size_t> (ch)]);
+            masterEqHighState[static_cast<std::size_t> (ch)]
+                += highCoefficient * (mix - masterEqHighState[static_cast<std::size_t> (ch)]);
+
+            const float lowBand = masterEqLowState[static_cast<std::size_t> (ch)];
+            const float highBand = mix - masterEqHighState[static_cast<std::size_t> (ch)];
+            const float midBand = mix - lowBand - highBand;
+            const float brightness = masterBrightness.load (std::memory_order_acquire);
+            const float masterProcessed = lowBand + midBand + highBand * (0.5f + brightness * 1.5f);
+            const float gain = masterGain.load (std::memory_order_acquire);
+
+            buffer.setSample (ch, i, juce::jlimit (-1.0f, 1.0f, masterProcessed * gain));
+        }
+    }
+
+    juce::dsp::Reverb::Parameters reverbParams;
+    const float space = masterSpace.load (std::memory_order_acquire);
+    reverbParams.roomSize = 0.25f + space * 0.75f;
+    reverbParams.damping = 0.55f;
+    reverbParams.wetLevel = space;
+    reverbParams.dryLevel = 1.0f - space * 0.25f;
+    reverbParams.width = 1.0f;
+    masterReverb.setParameters (reverbParams);
+
+    if (numChannels >= 2)
+    {
+        juce::dsp::AudioBlock<float> block (buffer);
+        juce::dsp::ProcessContextReplacing<float> context (block);
+        masterReverb.process (context);
     }
 }
 

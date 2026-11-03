@@ -107,6 +107,19 @@ ProjectState::ProjectState()
     swingAmount.store (juce::jlimit (0.0f, 1.0f,
                                      static_cast<float> (tree.getProperty (IDs::swing, 0.0))),
                        std::memory_order_release);
+    masterGain.store (juce::jlimit (0.0f, 1.0f,
+                                    static_cast<float> (tree.getProperty (IDs::masterGain, 1.0))),
+                      std::memory_order_release);
+    masterMuted.store (static_cast<bool> (tree.getProperty (IDs::masterMuted, false)),
+                       std::memory_order_release);
+    masterSolo.store (static_cast<bool> (tree.getProperty (IDs::masterSolo, false)),
+                      std::memory_order_release);
+    masterBrightness.store (juce::jlimit (0.0f, 1.0f,
+                                          static_cast<float> (tree.getProperty (IDs::masterBrightness, 0.5))),
+                            std::memory_order_release);
+    masterSpace.store (juce::jlimit (0.0f, 1.0f,
+                                     static_cast<float> (tree.getProperty (IDs::masterSpace, 0.0))),
+                       std::memory_order_release);
     modified.store (false, std::memory_order_release);
 
     // Só começamos a escutar depois da montagem inicial (projeto novo = limpo).
@@ -134,6 +147,11 @@ void ProjectState::ensureStructure()
     ensure (IDs::bitDepth, 24);
     ensure (IDs::formatVersion, 1);
     ensure (IDs::swing, 0.0);
+    ensure (IDs::masterGain, 1.0);
+    ensure (IDs::masterMuted, false);
+    ensure (IDs::masterSolo, false);
+    ensure (IDs::masterBrightness, 0.5);
+    ensure (IDs::masterSpace, 0.0);
 
     // Arquivo corrompido / editado à mão: força BPM dentro dos limites.
     const int currentBpm = getBpm();
@@ -1165,6 +1183,39 @@ void ProjectState::setSwingAmount (float newAmount)
     tree.setProperty (IDs::swing, limitedAmount, &undoManager);
 }
 
+void ProjectState::setMasterGain (float gain)
+{
+    const float limitedGain = juce::jlimit (0.0f, 1.0f, gain);
+    masterGain.store (limitedGain, std::memory_order_release);
+    tree.setProperty (IDs::masterGain, limitedGain, &undoManager);
+}
+
+void ProjectState::setMasterMuted (bool muted)
+{
+    masterMuted.store (muted, std::memory_order_release);
+    tree.setProperty (IDs::masterMuted, muted, &undoManager);
+}
+
+void ProjectState::setMasterSolo (bool solo)
+{
+    masterSolo.store (solo, std::memory_order_release);
+    tree.setProperty (IDs::masterSolo, solo, &undoManager);
+}
+
+void ProjectState::setMasterBrightness (float brightness)
+{
+    const float limitedBrightness = juce::jlimit (0.0f, 1.0f, brightness);
+    masterBrightness.store (limitedBrightness, std::memory_order_release);
+    tree.setProperty (IDs::masterBrightness, limitedBrightness, &undoManager);
+}
+
+void ProjectState::setMasterSpace (float space)
+{
+    const float limitedSpace = juce::jlimit (0.0f, 1.0f, space);
+    masterSpace.store (limitedSpace, std::memory_order_release);
+    tree.setProperty (IDs::masterSpace, limitedSpace, &undoManager);
+}
+
 // ---------------------------------------------------------------------------
 // Step sequencer
 // ---------------------------------------------------------------------------
@@ -1342,6 +1393,24 @@ void ProjectState::valueTreePropertyChanged (juce::ValueTree&, const juce::Ident
     if (property == IDs::swing)
         swingAmount.store (juce::jlimit (0.0f, 1.0f,
                                          static_cast<float> (tree.getProperty (IDs::swing, 0.0))),
+                           std::memory_order_release);
+    else if (property == IDs::masterGain)
+        masterGain.store (juce::jlimit (0.0f, 1.0f,
+                                        static_cast<float> (tree.getProperty (IDs::masterGain, 1.0))),
+                          std::memory_order_release);
+    else if (property == IDs::masterMuted)
+        masterMuted.store (static_cast<bool> (tree.getProperty (IDs::masterMuted, false)),
+                           std::memory_order_release);
+    else if (property == IDs::masterSolo)
+        masterSolo.store (static_cast<bool> (tree.getProperty (IDs::masterSolo, false)),
+                          std::memory_order_release);
+    else if (property == IDs::masterBrightness)
+        masterBrightness.store (juce::jlimit (0.0f, 1.0f,
+                                              static_cast<float> (tree.getProperty (IDs::masterBrightness, 0.5))),
+                                std::memory_order_release);
+    else if (property == IDs::masterSpace)
+        masterSpace.store (juce::jlimit (0.0f, 1.0f,
+                                         static_cast<float> (tree.getProperty (IDs::masterSpace, 0.0))),
                            std::memory_order_release);
 
     modified.store (true, std::memory_order_release);

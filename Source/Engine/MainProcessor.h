@@ -6,6 +6,7 @@
 #include <memory>
 #include <vector>
 #include <juce_audio_processors/juce_audio_processors.h>
+#include <juce_dsp/juce_dsp.h>
 
 #include "Core/ProjectState.h"
 #include "Core/SpscQueue.h"
@@ -241,6 +242,17 @@ private:
     std::vector<TakeLoadResult> completedTakeLoads; // protegido por takeLoadLock
 
     std::array<float, kMaxPlaylistTracks> slotGainSmoothed {};   // ganho suavizado por slot (preenchido no ctor)
+
+    std::atomic<bool> masterMuted { false };
+    std::atomic<bool> masterSolo { false };
+    std::atomic<float> masterGain { 1.0f };
+    std::atomic<float> masterBrightness { 0.5f };
+    std::atomic<float> masterSpace { 0.0f };
+
+    // EQ Master (3 bandas, estado por canal, preparado sem alocação no audio thread).
+    std::array<float, 2> masterEqLowState {};
+    std::array<float, 2> masterEqHighState {};
+    juce::dsp::Reverb masterReverb;
 
     // Canal Audio -> UI.
     std::atomic<int> playheadStep { -1 };
