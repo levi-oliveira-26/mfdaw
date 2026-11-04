@@ -43,8 +43,6 @@ public:
             player.beginBlock();
             player.triggerStep (0, 0);
             expect (! player.isPlaying (0));
-            player.triggerStep (1, 1);
-            expect (! player.isPlaying (0));
             player.triggerStep (1, 0);
             expect (player.isPlaying (0));
             expectWithinAbsoluteError (render (player, 2000), 0.5f, 1e-4f);

@@ -95,7 +95,9 @@ private:
             ProjectState state;
             state.setBpm (120);
             const int voice = state.addTrack (TrackType::Record);
-            expect (state.addClip (voice, 3, 2) > 0);   // compassos 3..4
+            expectEquals (state.addClip (voice, 3, 2), -1);   // clipe de Voz sem take é recusado
+            expect (state.addRecordedTake (voice, "z.wav", 3 * 16, 4.0) > 0);   // take + clipe nos compassos 3..4
+            expectEquals (static_cast<int> (state.getClips (voice).size()), 1);
 
             const int a = state.addRecordedTake (voice, "a.wav", 16, 20.0);   // começa no 1, quer 10 compassos
             expect (a > 0);
@@ -110,7 +112,7 @@ private:
             expect (b > 0);
             expectEquals (static_cast<int> (state.getClips (voice).size()), 2);
             expectEquals (state.getActiveTakeId (voice), b);
-            expectEquals (static_cast<int> (state.getTakes (voice).size()), 2);
+            expectEquals (static_cast<int> (state.getTakes (voice).size()), 3);
         }
 
         beginTest ("Active take selection and removal");

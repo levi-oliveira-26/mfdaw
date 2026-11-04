@@ -1133,7 +1133,7 @@ void MainProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBu
             const float highBand = mix - masterEqHighState[static_cast<std::size_t> (ch)];
             const float midBand = mix - lowBand - highBand;
             const float brightness = masterBrightness.load (std::memory_order_acquire);
-            const float masterProcessed = lowBand + midBand + highBand * (0.5f + brightness * 1.5f);
+            const float masterProcessed = lowBand + midBand + highBand * (0.5f + brightness);   // 0.5 = neutro (ganho 1.0)
             const float gain = masterGain.load (std::memory_order_acquire);
 
             buffer.setSample (ch, i, juce::jlimit (-1.0f, 1.0f, masterProcessed * gain));
@@ -1144,8 +1144,9 @@ void MainProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBu
     const float space = masterSpace.load (std::memory_order_acquire);
     reverbParams.roomSize = 0.25f + space * 0.75f;
     reverbParams.damping = 0.55f;
-    reverbParams.wetLevel = space;
-    reverbParams.dryLevel = 1.0f - space * 0.25f;
+    // juce::Reverb multiplica o seco por 2 e o molhado por 3 internamente: dryLevel 0.5 = ganho unitário.
+    reverbParams.wetLevel = space * 0.25f;
+    reverbParams.dryLevel = 0.5f * (1.0f - space * 0.25f);
     reverbParams.width = 1.0f;
     masterReverb.setParameters (reverbParams);
 
@@ -1154,6 +1155,14 @@ void MainProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBu
         juce::dsp::AudioBlock<float> block (buffer);
         juce::dsp::ProcessContextReplacing<float> context (block);
         masterReverb.process (context);
+    }
+
+    // A cauda do reverb soma ao sinal já limitado: limita de novo para nunca passar de 0 dBFS.
+    for (int ch = 0; ch < numChannels; ++ch)
+    {
+        float* data = buffer.getWritePointer (ch);
+        for (int i = 0; i < numSamples; ++i)
+            data[i] = juce::jlimit (-1.0f, 1.0f, data[i]);
     }
 }
 
