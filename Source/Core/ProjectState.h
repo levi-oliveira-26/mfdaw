@@ -9,6 +9,7 @@
 #include "Core/ClipModel.h"
 #include "Core/HarmonyChord.h"
 #include "Core/MelodyNote.h"
+#include "Core/SampleEdit.h"
 #include "Core/TakeModel.h"
 #include "Core/TrackModel.h"
 #include "Core/TrackType.h"
@@ -34,6 +35,7 @@ struct TakeData
     juce::String filePath;
     int startStep { 0 };            // compasso * 16 + passo em que a gravação começou
     double durationSeconds { 0.0 };
+    SampleEdit edit;                // só faixas de Amostra (Slice 09)
 
     [[nodiscard]] int startBar() const noexcept { return take::startBarOf (startStep); }
 };
@@ -96,6 +98,11 @@ namespace IDs
     inline const juce::Identifier takeStartStep { "startStep" };
     inline const juce::Identifier activeTake    { "activeTake" };    // propriedade da faixa: takeId em uso
     inline const juce::Identifier nextTakeId    { "nextTakeId" };    // contador monotônico (nó PLAYLIST)
+    // --- Edições da faixa de Amostra (propriedades do TAKE; Slice 09) ---
+    inline const juce::Identifier trimSilence   { "trimSilence" };
+    inline const juce::Identifier normalizeAudio { "normalizeAudio" };
+    inline const juce::Identifier fadeInMs      { "fadeInMs" };
+    inline const juce::Identifier fadeOutMs     { "fadeOutMs" };
 
     // --- Harmonia por faixa (propriedade do PLAYLIST_TRACK do tipo Harmony) ---
     inline const juce::Identifier chordMask     { "chordMask" };     // bit n = cartão n ligado (ausente = todos)
@@ -232,6 +239,16 @@ public:
     bool setActiveTake (int trackId, int takeId);
     /** Remove o take (o arquivo no disco NÃO é apagado aqui). Se era o ativo, o mais recente assume. */
     bool removeTake (int trackId, int takeId);
+
+    // --- Faixa de Amostra (Slice 09) ---
+    // Cada áudio importado é um TAKE da faixa (mesma maquinaria dos takes de voz: clipes ligados,
+    // regiões, carregamento assíncrono). addSample é UMA transação de undo: cria o áudio, o marca
+    // como ativo e cria o clipe no primeiro compasso livre (startBar < 0) ou em startBar.
+    // Devolve o id ou -1 (faixa não é de Amostra, arquivo vazio, duração inválida ou limite).
+    int addSample (int trackId, const juce::String& filePath, double durationSeconds, int startBar = -1);
+    [[nodiscard]] SampleEdit getSampleEdit (int trackId, int takeId) const;
+    /** Muda as edições (valores são limitados). No-op, sem histórico, se nada mudou. */
+    bool setSampleEdit (int trackId, int takeId, const SampleEdit& edit);
 
     // --- Harmonia (Slice 05) ---
     // Máscara dos cartões dos Smart Chords ligados na faixa (bit n = cartão n; padrão: todos).

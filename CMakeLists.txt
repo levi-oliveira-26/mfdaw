@@ -61,6 +61,7 @@ target_sources(MFDaw PRIVATE
     Source/UI/SmartChordsComponent.cpp
     Source/UI/PianoRollComponent.cpp
     Source/UI/VoiceRecorderComponentView.cpp
+    Source/UI/SampleEditorComponentView.cpp
     Source/UI/TrackRowComponent.cpp
     Source/UI/PlaylistComponent.cpp
     Source/UI/MainEditor.cpp)
@@ -93,6 +94,7 @@ add_executable(MFDawTests
     Source/Tests/HarmonyTrackTests.cpp
     Source/Tests/TakeTests.cpp
     Source/Tests/TakePlayerTests.cpp
+    Source/Tests/SampleTrackTests.cpp
     Source/Core/ChordGenerator.cpp
     Source/Core/ScaleLock.cpp
     Source/Core/ProjectState.cpp
@@ -103,6 +105,7 @@ add_executable(MFDawTests
     Source/UI/SmartChordsComponent.cpp
     Source/UI/PianoRollComponent.cpp
     Source/UI/VoiceRecorderComponentView.cpp
+    Source/UI/SampleEditorComponentView.cpp
     Source/UI/TrackRowComponent.cpp
     Source/UI/PlaylistComponent.cpp
     Source/UI/MainEditor.cpp)

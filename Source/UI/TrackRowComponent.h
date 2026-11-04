@@ -66,6 +66,9 @@ public:
     void mouseDoubleClick (const juce::MouseEvent&) override;
 
 private:
+    /** Faixas cujos clipes tocam áudio de arquivo (Voz e Amostra). */
+    [[nodiscard]] bool hasAudioClips() const noexcept { return type == TrackType::Record || type == TrackType::Sample; }
+
     struct TakeVisual
     {
         int id { -1 };

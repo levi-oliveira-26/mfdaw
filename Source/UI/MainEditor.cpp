@@ -22,7 +22,8 @@ MainEditor::MainEditor (MainProcessor& processorToEdit)
                 processorToEdit.getSampleRate()),
       smartChords (processorToEdit.getProjectState(), processorToEdit),
       pianoRoll (processorToEdit.getProjectState(), processorToEdit),
-      voiceRecorder (processorToEdit)
+      voiceRecorder (processorToEdit),
+      sampleEditor (processorToEdit)
 {
     setLookAndFeel (&laf);
 
@@ -78,6 +79,7 @@ MainEditor::MainEditor (MainProcessor& processorToEdit)
     playlist.onClipSelected = [this] (int trackId, int clipId)
     {
         voiceRecorder.setSelectedClip (trackId, clipId);
+        sampleEditor.setSelectedClip (trackId, clipId);
     };
     addAndMakeVisible (playlist);
 
@@ -90,6 +92,7 @@ MainEditor::MainEditor (MainProcessor& processorToEdit)
     addChildComponent (smartChords);
     addChildComponent (pianoRoll);
     addChildComponent (voiceRecorder);
+    addChildComponent (sampleEditor);
     addChildComponent (placeholder);
 
     // ----- Reatividade -----
@@ -195,6 +198,7 @@ void MainEditor::resized()
         smartChords.setBounds (inner);
         pianoRoll.setBounds (inner);
         voiceRecorder.setBounds (inner);
+        sampleEditor.setBounds (inner);
         placeholder.setBounds (inner);
     }
     else
@@ -269,13 +273,9 @@ void MainEditor::updateDetailPanel()
     voiceRecorder.setTrackId (detailOpen && detailAction == TrackAction::ToggleRecording ? detailTrackId : -1);
     voiceRecorder.setVisible (detailOpen && detailAction == TrackAction::ToggleRecording);
 
-    const bool showPlaceholder = detailOpen && detailAction == TrackAction::OpenSampleEditor;
-    placeholder.setVisible (showPlaceholder);
-
-    if (showPlaceholder)
-        placeholder.setContent (txt ("Editor de amostras"),
-                                txt ("Corte de silêncio, Normalizar e Envelope chegam em uma próxima fatia."),
-                                presentation::colourFor (TrackType::Sample));
+    sampleEditor.setTrackId (detailOpen && detailAction == TrackAction::OpenSampleEditor ? detailTrackId : -1);
+    sampleEditor.setVisible (detailOpen && detailAction == TrackAction::OpenSampleEditor);
+    placeholder.setVisible (false);
 }
 
 // ===========================================================================

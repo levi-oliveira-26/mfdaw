@@ -96,7 +96,7 @@ void TrackRowComponent::refreshFromState()
     if (dragMode == DragMode::None)
     {
         clips = state.getClips (trackId);
-        takes = type == TrackType::Record ? state.getTakes (trackId) : std::vector<TakeData> {};
+        takes = hasAudioClips() ? state.getTakes (trackId) : std::vector<TakeData> {};
         refreshTakeVisuals();
     }
 
@@ -123,7 +123,7 @@ const TrackRowComponent::TakeVisual* TrackRowComponent::findTakeVisual (int take
 
 void TrackRowComponent::refreshTakeVisuals()
 {
-    if (type != TrackType::Record)
+    if (! hasAudioClips())
     {
         takeVisuals.clear();
         return;
@@ -142,7 +142,7 @@ void TrackRowComponent::refreshTakeVisuals()
         TakeVisual visual;
         visual.id = takeIt->id;
         visual.filePath = takeIt->filePath;
-        visual.label = "Take " + juce::String (static_cast<int> (std::distance (takes.begin(), takeIt)) + 1);
+        visual.label = (type == TrackType::Sample ? "Amostra " : "Take ") + juce::String (static_cast<int> (std::distance (takes.begin(), takeIt)) + 1);
 
         juce::AudioFormatManager formats;
         formats.registerBasicFormats();
@@ -217,13 +217,13 @@ void TrackRowComponent::paint (juce::Graphics& g)
         g.setColour (accent.withAlpha (isDragged ? 1.0f : 0.85f));
         g.fillRect (rect);
 
-        if (type == TrackType::Record)
+        if (hasAudioClips())
         {
             const auto* visual = findTakeVisual (c.takeId);
             auto labelArea = rect.reduced (6.0f, 4.0f);
             labelArea = labelArea.removeFromTop (18.0f);
             g.setColour (col (kBgDeep));
-            g.drawText (visual != nullptr ? visual->label : juce::String ("Sem take"),
+            g.drawText (visual != nullptr ? visual->label : theme::txt ("Sem áudio"),
                         labelArea, juce::Justification::centredLeft, true);
 
             if (visual != nullptr)
