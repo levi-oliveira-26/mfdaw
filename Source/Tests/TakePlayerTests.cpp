@@ -217,6 +217,46 @@ public:
             expectWithinAbsoluteError (lastAfter (player, 1000), (48000.0f + 999.0f) / 192000.0f, 1e-4f);
         }
 
+        beginTest ("Back-to-back clips hand off without a click: the old voice fades out while the new fades in");
+        {
+            TakePlayer player;
+            auto a = makeBuffer (400000, 1.0f);
+            auto b = makeBuffer (400000, 1.0f);
+            player.publishTake (0, 0, a.get());
+            player.publishTake (0, 1, b.get());
+            player.setClipRegion (0, 0, 0, 16, 0);
+            player.setClipRegion (0, 1, 16, 32, 1);
+
+            player.triggerStep (0, 0, 0.125);
+            lastAfter (player, 2000);                       // regime: saída = 1.0
+            player.triggerStep (1, 0, 0.125);               // o 2º clipe começa colado no 1º
+            float lowest = 1.0f;
+            for (int i = 0; i < 1000; ++i)
+                lowest = juce::jmin (lowest, player.process (rate, gains));
+            expect (lowest > 0.98f);                        // sem emenda ficaria em 0 (estalo)
+            expectWithinAbsoluteError (lastAfter (player, 100), 1.0f, 1e-3f);
+        }
+
+        beginTest ("The outgoing buffer stays protected while its tail fades, then can be retired");
+        {
+            TakePlayer player;
+            auto a = makeBuffer (400000, 1.0f);
+            auto b = makeBuffer (400000, 1.0f);
+            player.publishTake (0, 0, a.get());
+            player.publishTake (0, 1, b.get());
+            player.setClipRegion (0, 0, 0, 16, 0);
+            player.setClipRegion (0, 1, 16, 32, 1);
+            player.triggerStep (0, 0, 0.125);
+            lastAfter (player, 2000);
+            player.triggerStep (1, 0, 0.125);
+
+            player.publishTake (0, 0, nullptr);             // a mensagem "tira" A enquanto a cauda ainda o lê
+            expect (! player.isRetired (a.get()));
+            lastAfter (player, 1000);                       // o fade de 5 ms termina
+            expect (player.isRetired (a.get()));
+            expect (! player.isRetired (b.get()));
+        }
+
         beginTest ("Negative offsets are ignored");
         {
             TakePlayer player;

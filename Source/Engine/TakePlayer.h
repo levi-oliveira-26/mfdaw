@@ -42,7 +42,8 @@ public:
             for (int t = 0; t < kMaxTakesPerTrack; ++t)
                 if (published[index (s)][index (t)].load (std::memory_order_seq_cst) == buffer)
                     return false;
-            if (hazard[index (s)].load (std::memory_order_seq_cst) == buffer)
+            if (hazard[index (s)][0].load (std::memory_order_seq_cst) == buffer
+                || hazard[index (s)][1].load (std::memory_order_seq_cst) == buffer)
                 return false;
         }
         return true;
@@ -85,13 +86,22 @@ public:
             if (match == nullptr) { voice.target = false; voice.lastStartedRegionStartStep = -1; continue; }
             if (absoluteStep != match->startStep && voice.lastStartedRegionStartStep == match->startStep) continue;
 
+            // Emenda sem estalo: a voz que ainda soa vira "cauda" (fade-out de 5 ms) enquanto a
+            // nova entra com fade-in. O ponteiro da cauda é protegido ANTES de o da voz nova ser anunciado.
+            if (voice.active && voice.env > 0.0f && voice.buffer != nullptr)
+            {
+                hazard[index (s)][1].store (voice.buffer, std::memory_order_seq_cst);
+                tails[index (s)] = voice;
+                tails[index (s)].target = false;
+            }
+
             const TakeBuffer* buffer = acquireBuffer (s, match->takeIndex);
             if (buffer == nullptr || buffer->samples.size() < 2 || buffer->sampleRate <= 0.0)
             {
                 voice.target = false;
                 voice.active = false;
                 voice.buffer = nullptr;
-                hazard[index (s)].store (nullptr, std::memory_order_seq_cst);
+                hazard[index (s)][0].store (nullptr, std::memory_order_seq_cst);
                 continue;
             }
 
@@ -121,7 +131,19 @@ public:
             if (! v.active)
             {
                 v.buffer = nullptr;
-                hazard[index (s)].store (nullptr, std::memory_order_seq_cst);
+                hazard[index (s)][0].store (nullptr, std::memory_order_seq_cst);
+            }
+        }
+
+        for (int s = 0; s < kSlots; ++s)
+        {
+            auto& tail = tails[index (s)];
+            if (! tail.active) continue;
+            sum += processVoice (tail, hostSampleRate) * slotGains[index (s)];
+            if (! tail.active)
+            {
+                tail.buffer = nullptr;
+                hazard[index (s)][1].store (nullptr, std::memory_order_seq_cst);
             }
         }
         return sum;
@@ -137,7 +159,7 @@ private:
 
     [[nodiscard]] const TakeBuffer* acquireBuffer (int slot, int takeIndex) noexcept
     {
-        auto& h = hazard[index (slot)];
+        auto& h = hazard[index (slot)][0];
         auto& p = published[index (slot)][index (takeIndex)];
         for (int attempt = 0; attempt < 8; ++attempt)
         {
@@ -171,8 +193,10 @@ private:
     [[nodiscard]] static constexpr std::size_t index (int n) noexcept { return static_cast<std::size_t> (n); }
 
     std::array<std::array<std::atomic<const TakeBuffer*>, kMaxTakesPerTrack>, kSlots> published {};
-    std::array<std::atomic<const TakeBuffer*>, kSlots> hazard {};
+    // [slot][0] = buffer da voz atual; [slot][1] = buffer da cauda (voz anterior em fade-out).
+    std::array<std::array<std::atomic<const TakeBuffer*>, 2>, kSlots> hazard {};
     std::array<std::array<Region, kMaxRegionsPerSlot>, kSlots> regions {};
     std::array<Voice, kSlots> voices {};
+    std::array<Voice, kSlots> tails {};   // voz anterior terminando em fade-out (emenda entre clipes)
 };
 } // namespace mf
