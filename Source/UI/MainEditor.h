@@ -7,6 +7,7 @@
 #include "UI/MfLookAndFeel.h"
 #include "UI/PianoRollComponent.h"
 #include "UI/PlaceholderPanel.h"
+#include "UI/SampleEditorComponentView.h"
 #include "UI/PlaylistComponent.h"
 #include "UI/SmartChordsComponent.h"
 #include "UI/StepGridComponent.h"
@@ -81,6 +82,7 @@ private:
     SmartChordsComponent smartChords;
     PianoRollComponent pianoRoll;
     VoiceRecorderComponentView voiceRecorder;
+    SampleEditorComponentView sampleEditor;
     PlaceholderPanel placeholder;
 
     juce::Rectangle<int> detailArea;

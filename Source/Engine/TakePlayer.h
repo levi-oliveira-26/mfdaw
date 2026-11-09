@@ -25,7 +25,7 @@ public:
     static constexpr int kMaxRegionsPerSlot = kPlaylistBars;
     static constexpr double kFadeSeconds = 0.005;
 
-    struct Region { int startStep { -1 }; int endStep { -1 }; int takeIndex { -1 }; };
+    struct Region { int startStep { -1 }; int endStep { -1 }; int takeIndex { -1 }; int offsetMs { 0 }; };
 
     // Message thread
     void publishTake (int slot, int takeIndex, const TakeBuffer* buffer) noexcept
@@ -49,7 +49,7 @@ public:
     }
 
     // Audio thread: endStep é exclusivo; takeIndex é o índice na tabela da faixa.
-    void setClipRegion (int slot, int regionIndex, int startStep, int endStep, int takeIndex) noexcept
+    void setClipRegion (int slot, int regionIndex, int startStep, int endStep, int takeIndex, int offsetMs = 0) noexcept
     {
         if (! validSlot (slot) || regionIndex < 0 || regionIndex >= kMaxRegionsPerSlot)
             return;
@@ -57,7 +57,7 @@ public:
         if (startStep < 0 || endStep <= startStep || endStep > kPlaylistSteps || ! validTake (takeIndex))
             r = Region {};
         else
-            r = { startStep, endStep, takeIndex };
+            r = { startStep, endStep, takeIndex, offsetMs < 0 ? 0 : offsetMs };
     }
 
     void clearRegions (int slot) noexcept
@@ -68,7 +68,8 @@ public:
 
     void beginBlock() noexcept {}
 
-    void triggerStep (int bar, int step) noexcept
+    /** secondsPerStep (> 0): permite entrar no MEIO de um clipe (carga tardia / retomar após pausa) alinhado ao áudio. */
+    void triggerStep (int bar, int step, double secondsPerStep = 0.0) noexcept
     {
         if (step < 0 || step >= kStepsPerBar || bar < 0 || bar >= kPlaylistBars) return;
         const int absoluteStep = bar * kStepsPerBar + step;
@@ -96,14 +97,17 @@ public:
 
             voice.buffer = buffer;
             voice.lastStartedRegionStartStep = match->startStep;
-            voice.pos = 0.0;
+            const double elapsedSeconds = secondsPerStep > 0.0
+                                              ? static_cast<double> (absoluteStep - match->startStep) * secondsPerStep : 0.0;
+            voice.pos = (static_cast<double> (match->offsetMs) * 0.001 + elapsedSeconds) * buffer->sampleRate;
             voice.env = 0.0f;
             voice.target = true;
             voice.active = true;
         }
     }
 
-    void releaseAll() noexcept { for (auto& v : voices) v.target = false; }
+    /** Pause/Stop: solta tudo; ao retomar, um clipe em andamento reentra alinhado. */
+    void releaseAll() noexcept { for (auto& v : voices) { v.target = false; v.lastStartedRegionStartStep = -1; } }
 
     [[nodiscard]] float process (double hostSampleRate, const std::array<float, kSlots>& slotGains) noexcept
     {

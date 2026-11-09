@@ -124,7 +124,7 @@ private:
     void finishTakeLoad (int slot, int takeIndex, int generation, const juce::String& path,
                          std::shared_ptr<TakeBuffer> buffer);
     /** WAV -> buffer mono em float (thread de carregamento). nullptr se ilegível ou longo demais. */
-    [[nodiscard]] static std::shared_ptr<TakeBuffer> loadTakeBuffer (const juce::String& path);
+    [[nodiscard]] static std::shared_ptr<TakeBuffer> loadTakeBuffer (const juce::String& path, const SampleEdit& edit = {});
     /** Uma nota de Melodia entrou/saiu da árvore: envia só essa mudança ao slot da faixa. */
     void postMelodyNoteChange (const juce::ValueTree& trackNode, const juce::ValueTree& noteNode, bool on);
 

@@ -104,7 +104,7 @@ public:
         beginTest ("getMaxClipLengthAt reports the room available for a new clip");
         {
             ProjectState state;
-            const int track = state.addTrack (TrackType::Sample);
+            const int track = state.addTrack (TrackType::Drum);
             state.addClip (track, 2, 2);                                       // ocupa [2,4)
 
             expectEquals (state.getMaxClipLengthAt (track, 0), 2);             // até o clipe

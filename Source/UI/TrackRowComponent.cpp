@@ -96,7 +96,7 @@ void TrackRowComponent::refreshFromState()
     if (dragMode == DragMode::None)
     {
         clips = state.getClips (trackId);
-        takes = type == TrackType::Record ? state.getTakes (trackId) : std::vector<TakeData> {};
+        takes = hasAudioClips() ? state.getTakes (trackId) : std::vector<TakeData> {};
         refreshTakeVisuals();
     }
 
@@ -123,7 +123,7 @@ const TrackRowComponent::TakeVisual* TrackRowComponent::findTakeVisual (int take
 
 void TrackRowComponent::refreshTakeVisuals()
 {
-    if (type != TrackType::Record)
+    if (! hasAudioClips())
     {
         takeVisuals.clear();
         return;
@@ -142,7 +142,7 @@ void TrackRowComponent::refreshTakeVisuals()
         TakeVisual visual;
         visual.id = takeIt->id;
         visual.filePath = takeIt->filePath;
-        visual.label = "Take " + juce::String (static_cast<int> (std::distance (takes.begin(), takeIt)) + 1);
+        visual.label = (type == TrackType::Sample ? "Amostra " : "Take ") + juce::String (static_cast<int> (std::distance (takes.begin(), takeIt)) + 1);
 
         juce::AudioFormatManager formats;
         formats.registerBasicFormats();
@@ -217,13 +217,13 @@ void TrackRowComponent::paint (juce::Graphics& g)
         g.setColour (accent.withAlpha (isDragged ? 1.0f : 0.85f));
         g.fillRect (rect);
 
-        if (type == TrackType::Record)
+        if (hasAudioClips())
         {
             const auto* visual = findTakeVisual (c.takeId);
             auto labelArea = rect.reduced (6.0f, 4.0f);
             labelArea = labelArea.removeFromTop (18.0f);
             g.setColour (col (kBgDeep));
-            g.drawText (visual != nullptr ? visual->label : juce::String ("Sem take"),
+            g.drawText (visual != nullptr ? visual->label : theme::txt ("Sem áudio"),
                         labelArea, juce::Justification::centredLeft, true);
 
             if (visual != nullptr)
@@ -231,12 +231,22 @@ void TrackRowComponent::paint (juce::Graphics& g)
                 auto waveArea = rect.reduced (5.0f, 4.0f).withTrimmedTop (24.0f).withTrimmedBottom (5.0f);
                 const float centreY = waveArea.getCentreY();
                 const float halfHeight = juce::jmax (1.0f, waveArea.getHeight() * 0.48f);
-                const float columnWidth = waveArea.getWidth() / static_cast<float> (visual->peaks.size());
+                // Trim esquerdo: mostra só o que sobrou do áudio (a partir do offset do clipe).
+                std::size_t firstBin = 0;
+                const auto takeIt = std::find_if (takes.begin(), takes.end(),
+                                                  [&c] (const TakeData& t) { return t.id == c.takeId; });
+                if (takeIt != takes.end() && c.offsetMs > 0 && takeIt->durationSeconds > 0.0)
+                    firstBin = std::min (visual->peaks.size() - 1,
+                                         static_cast<std::size_t> (static_cast<double> (c.offsetMs) / (takeIt->durationSeconds * 1000.0)
+                                                                   * static_cast<double> (visual->peaks.size())));
+
+                const auto shownBins = visual->peaks.size() - firstBin;
+                const float columnWidth = waveArea.getWidth() / static_cast<float> (shownBins);
                 g.setColour (col (kBgDeep).withAlpha (0.85f));
 
-                for (std::size_t i = 0; i < visual->peaks.size(); ++i)
+                for (std::size_t i = 0; i < shownBins; ++i)
                 {
-                    const float amplitude = juce::jmax (0.04f, visual->peaks[i]);
+                    const float amplitude = juce::jmax (0.04f, visual->peaks[firstBin + i]);
                     const float barHeight = amplitude * halfHeight;
                     const float x = waveArea.getX() + static_cast<float> (i) * columnWidth;
                     g.fillRect (x, centreY - barHeight,
@@ -313,8 +323,10 @@ void TrackRowComponent::mouseMove (const juce::MouseEvent& event)
 {
     const int index = clipIndexAtX (event.x);
     const bool onHandle = index >= 0
-                       && static_cast<float> (event.x) >= clipBounds (clips[static_cast<std::size_t> (index)]).getRight()
-                                                          - static_cast<float> (kResizeHandle);
+                       && (static_cast<float> (event.x) >= clipBounds (clips[static_cast<std::size_t> (index)]).getRight()
+                                                           - static_cast<float> (kResizeHandle)
+                           || static_cast<float> (event.x) < clipBounds (clips[static_cast<std::size_t> (index)]).getX()
+                                                             + static_cast<float> (kResizeHandle));
 
     setMouseCursor (onHandle ? juce::MouseCursor::LeftRightResizeCursor
                              : (index >= 0 ? juce::MouseCursor::DraggingHandCursor
@@ -333,7 +345,8 @@ void TrackRowComponent::mouseDown (const juce::MouseEvent& event)
 
     if (event.mods.isPopupMenu())
     {
-        showClipMenu (hit.id);
+        showClipMenu (hit.id, juce::jlimit (0, kPlaylistBars - 1,
+                                            static_cast<int> (static_cast<float> (event.x - kHeaderWidth) / barWidth())));
         return;
     }
 
@@ -344,9 +357,10 @@ void TrackRowComponent::mouseDown (const juce::MouseEvent& event)
         onClipSelected (trackId, hit.id);
 
     dragOriginal = dragPreview = hit;
-    dragMode = static_cast<float> (event.x) >= clipBounds (hit).getRight() - static_cast<float> (kResizeHandle)
-                   ? DragMode::ResizeRight
-                   : DragMode::Move;
+    const auto bounds = clipBounds (hit);
+    dragMode = static_cast<float> (event.x) >= bounds.getRight() - static_cast<float> (kResizeHandle) ? DragMode::ResizeRight
+             : static_cast<float> (event.x) < bounds.getX() + static_cast<float> (kResizeHandle)       ? DragMode::ResizeLeft
+                                                                                                        : DragMode::Move;
 }
 
 void TrackRowComponent::mouseDrag (const juce::MouseEvent& event)
@@ -361,6 +375,13 @@ void TrackRowComponent::mouseDrag (const juce::MouseEvent& event)
     {
         candidate.startBar = clip::clampStart (dragOriginal.startBar + deltaBars, dragOriginal.lengthBars);
     }
+    else if (dragMode == DragMode::ResizeLeft)
+    {
+        // Trim esquerdo: o fim fica fixo; o início anda (o áudio cortado continua no arquivo).
+        const int end = dragOriginal.startBar + dragOriginal.lengthBars;
+        candidate.startBar = juce::jlimit (0, end - kMinClipBars, dragOriginal.startBar + deltaBars);
+        candidate.lengthBars = end - candidate.startBar;
+    }
     else
     {
         candidate.lengthBars = juce::jlimit (kMinClipBars, kPlaylistBars - dragOriginal.startBar,
@@ -368,8 +389,12 @@ void TrackRowComponent::mouseDrag (const juce::MouseEvent& event)
     }
 
     // O domínio decide se a posição é válida; se não for, a pré-visualização fica onde estava.
-    if (state.canPlaceClip (trackId, candidate.startBar, candidate.lengthBars, dragOriginal.id)
-        && (candidate.startBar != dragPreview.startBar || candidate.lengthBars != dragPreview.lengthBars))
+    const bool valid = dragMode == DragMode::ResizeLeft
+                           ? (candidate.startBar == dragOriginal.startBar
+                              || state.canTrimClipStart (trackId, dragOriginal.id, candidate.startBar))
+                           : state.canPlaceClip (trackId, candidate.startBar, candidate.lengthBars, dragOriginal.id);
+
+    if (valid && (candidate.startBar != dragPreview.startBar || candidate.lengthBars != dragPreview.lengthBars))
     {
         dragPreview = candidate;
         repaint();
@@ -381,9 +406,15 @@ void TrackRowComponent::mouseUp (const juce::MouseEvent&)
     if (dragMode == DragMode::None)
         return;
 
+    const bool wasResizingLeft = dragMode == DragMode::ResizeLeft;
     dragMode = DragMode::None;   // antes de gravar: o refresh disparado pela árvore já recarrega os clipes
 
-    if (dragPreview.startBar != dragOriginal.startBar || dragPreview.lengthBars != dragOriginal.lengthBars)
+    if (wasResizingLeft)
+    {
+        if (dragPreview.startBar != dragOriginal.startBar)
+            state.trimClipStart (trackId, dragOriginal.id, dragPreview.startBar);
+    }
+    else if (dragPreview.startBar != dragOriginal.startBar || dragPreview.lengthBars != dragOriginal.lengthBars)
         state.setClipRange (trackId, dragOriginal.id, dragPreview.startBar, dragPreview.lengthBars);
 
     clips = state.getClips (trackId);
@@ -403,16 +434,27 @@ void TrackRowComponent::mouseDoubleClick (const juce::MouseEvent& event)
         state.addClip (trackId, bar, juce::jmin (kDefaultClipBars, room));
 }
 
-void TrackRowComponent::showClipMenu (int clipId)
+void TrackRowComponent::showClipMenu (int clipId, int clickedBar)
 {
+    bool canSplit = false;
+    for (const auto& c : clips)
+        if (c.id == clipId)
+            canSplit = clickedBar > c.startBar && clickedBar < c.endBar();
+
     juce::PopupMenu menu;
+    menu.addItem (2, theme::txt ("Dividir no compasso ") + juce::String (clickedBar + 1), canSplit);
     menu.addItem (1, theme::txt ("Remover clipe"));
 
     juce::Component::SafePointer<TrackRowComponent> safeThis (this);
-    menu.showMenuAsync (juce::PopupMenu::Options(), [safeThis, clipId] (int result)
+    menu.showMenuAsync (juce::PopupMenu::Options(), [safeThis, clipId, clickedBar] (int result)
     {
-        if (safeThis != nullptr && result == 1)
+        if (safeThis == nullptr)
+            return;
+
+        if (result == 1)
             safeThis->state.removeClip (safeThis->trackId, clipId);
+        else if (result == 2)
+            safeThis->state.splitClip (safeThis->trackId, clipId, clickedBar);
     });
 }
 

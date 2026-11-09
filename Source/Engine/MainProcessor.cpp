@@ -7,6 +7,7 @@
 
 #include "Core/ChordGenerator.h"
 #include "Core/FaderScale.h"
+#include "Engine/SampleProcessing.h"
 #include "UI/MainEditor.h"
 
 namespace mf
@@ -14,14 +15,16 @@ namespace mf
 class MainProcessor::TakeLoadJob final : public juce::ThreadPoolJob
 {
 public:
-    TakeLoadJob (MainProcessor& ownerIn, int slotIn, int takeIndexIn, int generationIn, juce::String pathIn)
+    TakeLoadJob (MainProcessor& ownerIn, int slotIn, int takeIndexIn, int generationIn,
+                 juce::String keyIn, juce::String pathIn, SampleEdit editIn)
         : juce::ThreadPoolJob ("M.F. DAW take loader"), owner (ownerIn), slot (slotIn),
-          takeIndex (takeIndexIn), generation (generationIn), path (std::move (pathIn)) {}
+          takeIndex (takeIndexIn), generation (generationIn), key (std::move (keyIn)),
+          path (std::move (pathIn)), edit (editIn) {}
 
     JobStatus runJob() override
     {
-        auto buffer = MainProcessor::loadTakeBuffer (path);
-        owner.finishTakeLoad (slot, takeIndex, generation, path, std::move (buffer));
+        auto buffer = MainProcessor::loadTakeBuffer (path, edit);
+        owner.finishTakeLoad (slot, takeIndex, generation, key, std::move (buffer));
         return jobHasFinished;
     }
 
@@ -30,7 +33,9 @@ private:
     int slot;
     int takeIndex;
     int generation;
+    juce::String key;     // identifica "arquivo + edições": muda quando o usuário edita
     juce::String path;
+    SampleEdit edit;
 };
 
 // ===========================================================================
@@ -205,7 +210,7 @@ void MainProcessor::pushArrangementState()
     pushClipRegions();
 }
 
-std::shared_ptr<TakeBuffer> MainProcessor::loadTakeBuffer (const juce::String& path)
+std::shared_ptr<TakeBuffer> MainProcessor::loadTakeBuffer (const juce::String& path, const SampleEdit& edit)
 {
     const juce::File file (path);
     if (! file.existsAsFile())
@@ -235,6 +240,10 @@ std::shared_ptr<TakeBuffer> MainProcessor::loadTakeBuffer (const juce::String& p
             result->samples[static_cast<std::size_t> (i)] += in[i] * channelScale;
     }
 
+    // Edições da faixa de Amostra: processadas aqui (thread de carga), nunca na audio thread.
+    if (! edit.isDefault())
+        result->samples = sampleproc::process (result->samples, result->sampleRate, edit);
+
     return result;
 }
 
@@ -246,11 +255,12 @@ void MainProcessor::syncTakes()
     {
         const auto track = slot < numTracks ? projectState.getTrackByIndex (slot) : nullptr;
         const auto slotIndex = static_cast<std::size_t> (slot);
-        const auto takes = track != nullptr && track->getType() == TrackType::Record
-                               ? projectState.getTakes (track->getId()) : std::vector<TakeData> {};
+        const bool isAudioTrack = track != nullptr
+                                  && (track->getType() == TrackType::Record || track->getType() == TrackType::Sample);
+        const auto takes = isAudioTrack ? projectState.getTakes (track->getId()) : std::vector<TakeData> {};
         std::array<bool, kMaxTakesPerTrack> requiredTakes {};
 
-        if (track != nullptr && track->getType() == TrackType::Record)
+        if (isAudioTrack)
             for (const auto& clip : projectState.getClips (track->getId()))
                 for (int i = 0; i < static_cast<int> (takes.size()); ++i)
                     if (takes[static_cast<std::size_t> (i)].id == clip.takeId)
@@ -259,14 +269,17 @@ void MainProcessor::syncTakes()
         for (int takeIndex = 0; takeIndex < kMaxTakesPerTrack; ++takeIndex)
         {
             const auto takeIdx = static_cast<std::size_t> (takeIndex);
-            const juce::String path = takeIndex < static_cast<int> (takes.size())
-                                          && requiredTakes[takeIdx]
-                                          ? takes[static_cast<std::size_t> (takeIndex)].filePath : juce::String {};
+            const bool needed = takeIndex < static_cast<int> (takes.size()) && requiredTakes[takeIdx];
+            const juce::String path = needed ? takes[static_cast<std::size_t> (takeIndex)].filePath : juce::String {};
+            const SampleEdit edit = needed ? takes[static_cast<std::size_t> (takeIndex)].edit : SampleEdit {};
+            // A chave inclui as edições: mexer num controle recarrega o áudio já processado.
+            const juce::String key = path.isEmpty() ? juce::String {}
+                                                    : path + "|" + juce::String (edit.signature());
 
-            if (path == takePaths[slotIndex][takeIdx])
+            if (key == takePaths[slotIndex][takeIdx])
                 continue;
 
-            takePaths[slotIndex][takeIdx] = path;
+            takePaths[slotIndex][takeIdx] = key;
             const int generation = ++takeLoadGeneration[slotIndex][takeIdx];
 
             // Retire the old publication immediately. A clip cannot accidentally
@@ -277,7 +290,7 @@ void MainProcessor::syncTakes()
                 takeGraveyard.push_back (std::move (old));
 
             if (path.isNotEmpty())
-                takeLoaderPool.addJob (new TakeLoadJob (*this, slot, takeIndex, generation, path), true);
+                takeLoaderPool.addJob (new TakeLoadJob (*this, slot, takeIndex, generation, key, path, edit), true);
         }
     }
 
@@ -338,7 +351,7 @@ void MainProcessor::pushClipRegions()
         const auto track = slot < numTracks ? projectState.getTrackByIndex (slot) : nullptr;
         int regionIndex = 0;
 
-        if (track != nullptr && track->getType() == TrackType::Record)
+        if (track != nullptr && (track->getType() == TrackType::Record || track->getType() == TrackType::Sample))
         {
             const auto takes = projectState.getTakes (track->getId());
             for (const auto& clip : projectState.getClips (track->getId()))
@@ -353,7 +366,7 @@ void MainProcessor::pushClipRegions()
 
                 const int startStep = clip.startBar * kStepsPerBar;
                 const int endStep = (clip.startBar + clip.lengthBars) * kStepsPerBar;
-                post (EngineEvent::setClipRegion (slot, regionIndex, startStep, endStep, takeIndex));
+                post (EngineEvent::setClipRegion (slot, regionIndex, startStep, endStep, takeIndex, clip.offsetMs));
                 ++regionIndex;
                 if (regionIndex >= TakePlayer::kMaxRegionsPerSlot)
                     break;
@@ -499,6 +512,13 @@ void MainProcessor::valueTreePropertyChanged (juce::ValueTree& changedTree, cons
             pushHarmonySlot (slot);   // cartão ligado/desligado (inclui undo/redo)
         else if (property == IDs::activeTake)
             syncTakes();              // outro take escolhido (inclui undo/redo)
+    }
+    else if (changedTree.hasType (IDs::take))
+    {
+        // Edição da faixa de Amostra mudou (inclui undo/redo): recarrega o áudio processado.
+        if (property == IDs::trimSilence || property == IDs::normalizeAudio
+            || property == IDs::fadeInMs || property == IDs::fadeOutMs)
+            syncTakes();
     }
     else if (changedTree.hasType (IDs::clip))
     {
@@ -734,7 +754,7 @@ void MainProcessor::drainEvents() noexcept
                 break;
 
             case EngineEvent::Type::SetClipRegion:
-                takePlayer.setClipRegion (event.a, event.b, event.c, event.d, event.e);
+                takePlayer.setClipRegion (event.a, event.b, event.c, event.d, event.e, event.f);
                 break;
 
             case EngineEvent::Type::SetHarmonyChord:
@@ -842,7 +862,7 @@ void MainProcessor::triggerStepInBar (int step, int bar, int sampleOffset, juce:
     // independentemente de a Bateria estar audível neste compasso.
     releaseMelodyVoices();
     triggerMelodyStep (step, bar);
-    takePlayer.triggerStep (bar, step);
+    takePlayer.triggerStep (bar, step, 15.0 / static_cast<double> (juce::jmax (1, bpm)));   // 1 passo = 1/16 de compasso 4/4
 
     if (step == 0)   // o acorde dura o compasso inteiro: troca só no primeiro passo
     {
