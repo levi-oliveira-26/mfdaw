@@ -25,7 +25,8 @@ namespace mf
  *  SetMelodyClear: a = slot (esvazia só as NOTAS do slot; os compassos vão por SetSlotBars)
  *  SetSlotBars   : a = slot, b = máscara de compassos cobertos pelos clipes da faixa; 0 = rascunho
  *  SetHarmonyChord: a = slot, b = cartão (0..3) | (ligado ? 0x100 : 0), c = 3 notas MIDI empacotadas (harmony::packNotes)
- *  SetClipRegion: a = slot, b = índice da região, c = passo inicial, d = passo final exclusivo, e = índice do take
+ *  SetClipRegion: a = slot, b = índice da região, c = passo inicial, d = passo final exclusivo, e = índice do take,
+ *                 f = início dentro do áudio em ms (trim esquerdo)
  *
  * "Slot" é o índice da faixa na Playlist (0..kMaxPlaylistTracks-1).
  */
@@ -42,6 +43,7 @@ struct EngineEvent
     std::int32_t c { 0 };
     std::int32_t d { 0 };
     std::int32_t e { 0 };
+    std::int32_t f { 0 };
 
     [[nodiscard]] static EngineEvent setBpm (int bpm) noexcept       { return { Type::SetBpm, bpm, 0 }; }
     [[nodiscard]] static EngineEvent setPlaying (bool on) noexcept   { return { Type::SetPlaying, on ? 1 : 0, 0 }; }
@@ -91,9 +93,10 @@ struct EngineEvent
         return { Type::SetSlotBars, slot, barMask, 0 };
     }
 
-    [[nodiscard]] static EngineEvent setClipRegion (int slot, int region, int startStep, int endStep, int takeIndex) noexcept
+    [[nodiscard]] static EngineEvent setClipRegion (int slot, int region, int startStep, int endStep, int takeIndex,
+                                                    int offsetMs = 0) noexcept
     {
-        return { Type::SetClipRegion, slot, region, startStep, endStep, takeIndex };
+        return { Type::SetClipRegion, slot, region, startStep, endStep, takeIndex, offsetMs };
     }
 
     [[nodiscard]] static EngineEvent setTrackGain (int slot, int gainPermille) noexcept

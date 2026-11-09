@@ -20,7 +20,8 @@ struct ClipData
     int id         { -1 };
     int startBar   { 0 };
     int lengthBars { 0 };
-    int takeId { -1 }; // vínculo opcional a um TAKE, usado somente por faixas de Voz
+    int takeId { -1 }; // vínculo opcional a um TAKE, usado somente por faixas de Voz e Amostra
+    int offsetMs { 0 }; // onde o clipe começa DENTRO do áudio (trim esquerdo / divisão); só clipes com takeId
 
     [[nodiscard]] constexpr bool isValid() const noexcept { return id > 0; }
     [[nodiscard]] constexpr int  endBar() const noexcept  { return startBar + lengthBars; }
@@ -49,6 +50,15 @@ namespace clip
 [[nodiscard]] constexpr int barMaskFor (int startBar, int lengthBars) noexcept
 {
     return isValidRange (startBar, lengthBars) ? (((1 << lengthBars) - 1) << startBar) : 0;
+}
+
+/** Limite do trim: um áudio tem no máximo 1 hora (TakeModel). */
+inline constexpr int kMaxClipOffsetMs = 3'600'000;
+
+/** Duração de um compasso (4/4) em milissegundos arredondados, no BPM dado. */
+[[nodiscard]] constexpr int barDurationMs (int bpm) noexcept
+{
+    return bpm < 1 ? 0 : (240000 + bpm / 2) / bpm;
 }
 
 /** Compasso seguinte, com loop ao fim da Playlist. */

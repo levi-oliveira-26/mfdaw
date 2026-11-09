@@ -366,7 +366,7 @@ void MainProcessor::pushClipRegions()
 
                 const int startStep = clip.startBar * kStepsPerBar;
                 const int endStep = (clip.startBar + clip.lengthBars) * kStepsPerBar;
-                post (EngineEvent::setClipRegion (slot, regionIndex, startStep, endStep, takeIndex));
+                post (EngineEvent::setClipRegion (slot, regionIndex, startStep, endStep, takeIndex, clip.offsetMs));
                 ++regionIndex;
                 if (regionIndex >= TakePlayer::kMaxRegionsPerSlot)
                     break;
@@ -754,7 +754,7 @@ void MainProcessor::drainEvents() noexcept
                 break;
 
             case EngineEvent::Type::SetClipRegion:
-                takePlayer.setClipRegion (event.a, event.b, event.c, event.d, event.e);
+                takePlayer.setClipRegion (event.a, event.b, event.c, event.d, event.e, event.f);
                 break;
 
             case EngineEvent::Type::SetHarmonyChord:
@@ -862,7 +862,7 @@ void MainProcessor::triggerStepInBar (int step, int bar, int sampleOffset, juce:
     // independentemente de a Bateria estar audível neste compasso.
     releaseMelodyVoices();
     triggerMelodyStep (step, bar);
-    takePlayer.triggerStep (bar, step);
+    takePlayer.triggerStep (bar, step, 15.0 / static_cast<double> (juce::jmax (1, bpm)));   // 1 passo = 1/16 de compasso 4/4
 
     if (step == 0)   // o acorde dura o compasso inteiro: troca só no primeiro passo
     {

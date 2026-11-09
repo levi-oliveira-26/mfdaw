@@ -162,6 +162,70 @@ public:
                 last = player.process (rate, scaled);
             expectWithinAbsoluteError (last, 0.25f, 1e-4f);
         }
+
+        // Rampa 0..1 em 4 s (192000 amostras): o valor revela a posição de leitura.
+        auto makeRamp = [&]
+        {
+            auto b = std::make_unique<TakeBuffer>();
+            b->sampleRate = rate;
+            for (int i = 0; i < 192000; ++i)
+                b->samples.push_back (static_cast<float> (i) / 192000.0f);
+            return b;
+        };
+        auto lastAfter = [&] (TakePlayer& player, int count)
+        {
+            float v = 0.0f;
+            for (int i = 0; i < count; ++i)
+                v = player.process (rate, gains);
+            return v;
+        };
+
+        beginTest ("Left trim: a region starts reading inside the audio at its offset");
+        {
+            TakePlayer player;
+            auto ramp = makeRamp();
+            player.publishTake (0, 0, ramp.get());
+            player.setClipRegion (0, 0, 0, 16, 0, 1000);   // começa 1 s dentro do áudio
+            player.triggerStep (0, 0, 0.125);
+            expectWithinAbsoluteError (lastAfter (player, 1000), (48000.0f + 999.0f) / 192000.0f, 1e-4f);
+        }
+
+        beginTest ("Entering a clip mid-way (late load) stays aligned with the audio, offset included");
+        {
+            TakePlayer player;
+            auto ramp = makeRamp();
+            player.setClipRegion (0, 0, 0, 16, 0, 1000);
+            player.triggerStep (0, 0, 0.125);                 // ainda não carregado
+            expect (! player.isPlaying (0));
+            player.publishTake (0, 0, ramp.get());
+            player.triggerStep (0, 4, 0.125);                 // 4 passos = 0,5 s depois
+            expectWithinAbsoluteError (lastAfter (player, 1000), (72000.0f + 999.0f) / 192000.0f, 1e-4f);
+        }
+
+        beginTest ("Resuming after pause re-enters the running clip at the right place");
+        {
+            TakePlayer player;
+            auto ramp = makeRamp();
+            player.publishTake (0, 0, ramp.get());
+            player.setClipRegion (0, 0, 0, 16, 0);
+            player.triggerStep (0, 0, 0.125);
+            lastAfter (player, 500);
+            player.releaseAll();
+            lastAfter (player, 1000);                         // fade-out termina
+            expect (! player.isPlaying (0));
+            player.triggerStep (0, 8, 0.125);                 // retomou no passo 8 = 1 s
+            expectWithinAbsoluteError (lastAfter (player, 1000), (48000.0f + 999.0f) / 192000.0f, 1e-4f);
+        }
+
+        beginTest ("Negative offsets are ignored");
+        {
+            TakePlayer player;
+            auto ramp = makeRamp();
+            player.publishTake (0, 0, ramp.get());
+            player.setClipRegion (0, 0, 0, 16, 0, -5000);
+            player.triggerStep (0, 0, 0.125);
+            expectWithinAbsoluteError (lastAfter (player, 1000), 999.0f / 192000.0f, 1e-4f);
+        }
     }
 };
 

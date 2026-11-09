@@ -99,6 +99,7 @@ namespace IDs
     inline const juce::Identifier activeTake    { "activeTake" };    // propriedade da faixa: takeId em uso
     inline const juce::Identifier nextTakeId    { "nextTakeId" };    // contador monotônico (nó PLAYLIST)
     // --- Edições da faixa de Amostra (propriedades do TAKE; Slice 09) ---
+    inline const juce::Identifier clipOffsetMs  { "offsetMs" };           // trim esquerdo do clipe (ms dentro do áudio)
     inline const juce::Identifier trimSilence   { "trimSilence" };
     inline const juce::Identifier normalizeAudio { "normalizeAudio" };
     inline const juce::Identifier fadeInMs      { "fadeInMs" };
@@ -221,6 +222,16 @@ public:
     bool removeClip (int trackId, int clipId);
     /** Move e/ou redimensiona de uma só vez (um único passo de undo). */
     bool setClipRange (int trackId, int clipId, int startBar, int lengthBars);
+    /**
+     * Trim ESQUERDO: leva o início do clipe para newStartBar mantendo o fim. Em clipes de áudio o
+     * trecho cortado continua no arquivo (offsetMs acompanha) e dá para reabrir até o começo do áudio;
+     * não passa de outro clipe. UM passo de undo. false se inválido (nada muda).
+     */
+    bool trimClipStart (int trackId, int clipId, int newStartBar);
+    /** A UI usa para validar a pré-visualização do arrasto sem alterar nada. */
+    [[nodiscard]] bool canTrimClipStart (int trackId, int clipId, int newStartBar) const;
+    /** Divide o clipe em atBar (start < atBar < fim) em dois, ligados ao mesmo áudio. UM passo de undo. Devolve o id do novo clipe ou -1. */
+    int splitClip (int trackId, int clipId, int atBar);
     /** Vincula um clipe de Voz a um take da mesma faixa; -1 remove o vínculo. */
     bool setClipTake (int trackId, int clipId, int takeId);
     /** Clipes da faixa em ordem crescente de início (vazio se a faixa não existe). */
@@ -323,6 +334,7 @@ private:
 
     /** Próximo takeId (monotônico, único em toda a Playlist). */
     int allocateTakeId();
+    bool evaluateTrim (int trackId, int clipId, int newStartBar, int& newOffsetMs, bool& isAudio) const;
 
     /** Nó PLAYLIST_TRACK do id (inválido se não existir). */
     [[nodiscard]] juce::ValueTree findTrackNode (int trackId) const;

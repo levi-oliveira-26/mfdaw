@@ -77,13 +77,13 @@ private:
         std::array<float, 32> peaks {};
     };
 
-    enum class DragMode { None, Move, ResizeRight };
-    static constexpr int kResizeHandle = 10;   // px da borda direita que redimensionam
+    enum class DragMode { None, Move, ResizeLeft, ResizeRight };
+    static constexpr int kResizeHandle = 10;   // px de cada borda (esquerda = trim, direita = tamanho) que redimensionam
 
     [[nodiscard]] float barWidth() const noexcept { return barWidthFor (getWidth()); }
     [[nodiscard]] int clipIndexAtX (int x) const noexcept;               // -1 se vazio / fora da lane
     [[nodiscard]] juce::Rectangle<float> clipBounds (const ClipData& c) const noexcept;
-    void showClipMenu (int clipId);
+    void showClipMenu (int clipId, int clickedBar);
     void refreshTakeVisuals();
     [[nodiscard]] const TakeVisual* findTakeVisual (int takeId) const noexcept;
 
