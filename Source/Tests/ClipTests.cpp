@@ -9,7 +9,7 @@
 
 namespace mf::tests
 {
-/** Vertical Slice 02: clipes de compassos inteiros nas lanes da Playlist. */
+/** Validação dos clipes da Playlist nas grades de compassos e de 1/16. */
 class ClipTests final : public juce::UnitTest
 {
 public:
@@ -65,6 +65,34 @@ public:
             expectEquals (static_cast<int> (clips.size()), 3);
             expect (std::is_sorted (clips.begin(), clips.end(),
                                     [] (const ClipData& a, const ClipData& b) { return a.startBar < b.startBar; }));
+        }
+
+        beginTest ("Step-grid clips can share a bar without overlapping");
+        {
+            ProjectState state;
+            const int track = state.addTrack (TrackType::Drum);
+            const int first = state.addClipAtStep (track, 0, 3);
+            const int adjacent = state.addClipAtStep (track, 3, 2);
+
+            expect (first > 0 && adjacent > 0);
+            expectEquals (state.addClipAtStep (track, 2, 2), -1);
+            expect (state.canPlaceClipAtStep (track, 5, 1));
+            expect (! state.canPlaceClipAtStep (track, kPlaylistSteps - 1, 2));
+            expect (! state.canPlaceClipAtStep (track, -1, 1));
+
+            const auto clips = state.getClips (track);
+            expectEquals (clips[0].startStep, 0);
+            expectEquals (clips[0].lengthSteps, 3);
+            expectEquals (clips[1].startStep, 3);
+            expectEquals (clips[1].lengthSteps, 2);
+
+            ProjectState restored;
+            expect (restored.loadFromJsonString (state.createJsonString()));
+            const auto restoredClips = restored.getClips (track);
+            expectEquals (restoredClips[0].startStep, 0);
+            expectEquals (restoredClips[0].lengthSteps, 3);
+            expectEquals (restoredClips[1].startStep, 3);
+            expectEquals (restoredClips[1].lengthSteps, 2);
         }
 
         beginTest ("Clips of different tracks may overlap; ids are unique across the playlist");

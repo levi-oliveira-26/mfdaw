@@ -45,6 +45,10 @@ struct AudioClipModel
     juce::String filePath;
     int startBar { 0 };
     double durationSeconds { 0.0 };
+    int startPosition { -1 }; // posição na playlist em passos de 1/16 de compasso
+    int duration { 0 }; // duração na playlist em passos de 1/16 de compasso
+    int trimStartOffset { 0 }; // milissegundos removidos do início do arquivo
+    int trimEndOffset { 0 }; // milissegundos removidos do fim do arquivo
 };
 
 /** Identificadores de propriedades / tipos da árvore de estado. */
@@ -114,6 +118,12 @@ namespace IDs
     inline const juce::Identifier filePath    { "filePath" };
     inline const juce::Identifier startBar    { "startBar" };
     inline const juce::Identifier durationSeconds { "durationSeconds" };
+    inline const juce::Identifier clipStartStep { "clipStartStep" };
+    inline const juce::Identifier clipLengthSteps { "clipLengthSteps" };
+    inline const juce::Identifier startPosition { "startPosition" };
+    inline const juce::Identifier duration { "duration" };
+    inline const juce::Identifier trimStartOffset { "trimStartOffset" };
+    inline const juce::Identifier trimEndOffset { "trimEndOffset" };
 
     // --- Sessão transitória (NÃO salva, NÃO suja o projeto) ---
     inline const juce::Identifier session     { "SESSION" };
@@ -211,14 +221,20 @@ public:
     [[nodiscard]] std::unique_ptr<TrackModel> getTrackById (int trackId);
 
     // --- Clipes (Slice 02) ---
-    // Intervalos de compassos inteiros, sem sobreposição dentro da faixa. Cada
+    // Os clipes são validados em passos de 1/16, sem sobreposição dentro da faixa.
+    // As operações legadas em compassos inteiros continuam disponíveis; cada
     // operação pública é UMA transação de undo. Falhas devolvem -1/false e não
     // alteram o estado.
     /** `true` se [startBar, startBar+lengthBars) cabe no projeto e não colide com outro
      *  clipe da faixa (ignorando `ignoreClipId`, usado ao mover/redimensionar). */
     [[nodiscard]] bool canPlaceClip (int trackId, int startBar, int lengthBars, int ignoreClipId = -1) const;
+    /** Versão de canPlaceClip com posições e durações em passos de 1/16 de compasso. */
+    [[nodiscard]] bool canPlaceClipAtStep (int trackId, int startStep, int lengthSteps,
+                                           int ignoreClipId = -1) const;
     /** Cria um clipe; devolve o clipId ou -1. */
     int addClip (int trackId, int startBar, int lengthBars);
+    /** Cria um clipe na grade de 1/16; devolve o clipId ou -1. */
+    int addClipAtStep (int trackId, int startStep, int lengthSteps);
     bool removeClip (int trackId, int clipId);
     /** Move e/ou redimensiona de uma só vez (um único passo de undo). */
     bool setClipRange (int trackId, int clipId, int startBar, int lengthBars);

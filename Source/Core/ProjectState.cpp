@@ -1,6 +1,7 @@
 #include "Core/ProjectState.h"
 
 #include <algorithm>
+#include <cmath>
 
 #include "Core/FaderScale.h"
 
@@ -31,6 +32,30 @@ constexpr const char* kDefaultTrackNames[kNumTracks] = {
 
     const int type = static_cast<int> (trackNode.getProperty (IDs::trackType, -1));
     return type == static_cast<int> (TrackType::Record) || type == static_cast<int> (TrackType::Sample);
+}
+
+[[nodiscard]] int clipStartStep (const juce::ValueTree& node)
+{
+    return node.hasProperty (IDs::clipStartStep)
+               ? static_cast<int> (node.getProperty (IDs::clipStartStep, 0))
+               : static_cast<int> (node.getProperty (IDs::startBar, 0)) * kStepsPerBar;
+}
+
+[[nodiscard]] int clipLengthSteps (const juce::ValueTree& node)
+{
+    return node.hasProperty (IDs::clipLengthSteps)
+               ? static_cast<int> (node.getProperty (IDs::clipLengthSteps, 0))
+               : static_cast<int> (node.getProperty (IDs::lengthBars, 0)) * kStepsPerBar;
+}
+
+void setClipStepRange (juce::ValueTree& node, int startStep, int lengthSteps, juce::UndoManager* undo)
+{
+    const int endStep = startStep + lengthSteps;
+    node.setProperty (IDs::clipStartStep, startStep, undo);
+    node.setProperty (IDs::clipLengthSteps, lengthSteps, undo);
+    node.setProperty (IDs::startBar, startStep / kStepsPerBar, undo);
+    node.setProperty (IDs::lengthBars, (endStep + kStepsPerBar - 1) / kStepsPerBar
+                                               - startStep / kStepsPerBar, undo);
 }
 
 [[nodiscard]] juce::Identifier velocityProperty (int step)
@@ -271,12 +296,46 @@ void ProjectState::sanitizePlaylist()
                 continue;
             }
 
-            const int start  = static_cast<int> (node.getProperty (IDs::startBar, -1));
-            const int length = static_cast<int> (node.getProperty (IDs::lengthBars, 0));
+            int startStep = 0;
+            int lengthSteps = 0;
+            bool valid = node.hasType (IDs::clip);
+            const int legacyStartBar = static_cast<int> (node.getProperty (IDs::startBar, -1));
+            const int legacyLengthBars = static_cast<int> (node.getProperty (IDs::lengthBars, 0));
 
-            bool valid = node.hasType (IDs::clip) && clip::isValidRange (start, length);
+            if (node.hasProperty (IDs::clipStartStep) && node.hasProperty (IDs::clipLengthSteps))
+            {
+                startStep = clipStartStep (node);
+                lengthSteps = clipLengthSteps (node);
+                valid = valid && clip::isValidStepRange (startStep, lengthSteps);
+                if (valid)
+                {
+                    const int expectedStartBar = startStep / kStepsPerBar;
+                    const int expectedLengthBars = (startStep + lengthSteps + kStepsPerBar - 1) / kStepsPerBar
+                                                   - expectedStartBar;
+                    if (legacyStartBar != expectedStartBar || legacyLengthBars != expectedLengthBars)
+                    {
+                        valid = clip::isValidRange (legacyStartBar, legacyLengthBars);
+                        if (valid)
+                        {
+                            startStep = legacyStartBar * kStepsPerBar;
+                            lengthSteps = legacyLengthBars * kStepsPerBar;
+                        }
+                    }
+                }
+            }
+            else if (clip::isValidRange (legacyStartBar, legacyLengthBars))
+            {
+                startStep = legacyStartBar * kStepsPerBar;
+                lengthSteps = legacyLengthBars * kStepsPerBar;
+            }
+            else
+            {
+                valid = false;
+            }
+
+            valid = valid && clip::isValidStepRange (startStep, lengthSteps);
             for (const auto& other : kept)
-                if (valid && clip::overlaps (start, length, other.startBar, other.lengthBars))
+                if (valid && clip::overlapsSteps (startStep, lengthSteps, other.startStep, other.lengthSteps))
                     valid = false;
 
             if (! valid)
@@ -293,7 +352,11 @@ void ProjectState::sanitizePlaylist()
             }
 
             usedClipIds.add (id);
-            kept.push_back ({ id, start, length, static_cast<int> (node.getProperty (IDs::takeId, -1)) });
+            const int startBar = startStep / kStepsPerBar;
+            const int endBar = (startStep + lengthSteps + kStepsPerBar - 1) / kStepsPerBar;
+            kept.push_back ({ id, startBar, endBar - startBar,
+                              static_cast<int> (node.getProperty (IDs::takeId, -1)), 0,
+                              startStep, lengthSteps });
             ++c;
         }
     }
@@ -620,8 +683,16 @@ std::unique_ptr<TrackModel> ProjectState::getTrackById (int trackId)
 // ---------------------------------------------------------------------------
 bool ProjectState::canPlaceClip (int trackId, int startBar, int lengthBars, int ignoreClipId) const
 {
+    if (! clip::isValidRange (startBar, lengthBars))
+        return false;
+
+    return canPlaceClipAtStep (trackId, startBar * kStepsPerBar, lengthBars * kStepsPerBar, ignoreClipId);
+}
+
+bool ProjectState::canPlaceClipAtStep (int trackId, int startStep, int lengthSteps, int ignoreClipId) const
+{
     const auto trackNode = findTrackNode (trackId);
-    if (! trackNode.isValid() || ! clip::isValidRange (startBar, lengthBars))
+    if (! trackNode.isValid() || ! clip::isValidStepRange (startStep, lengthSteps))
         return false;
 
     for (int c = 0; c < trackNode.getNumChildren(); ++c)
@@ -630,9 +701,7 @@ bool ProjectState::canPlaceClip (int trackId, int startBar, int lengthBars, int 
         if (! other.hasType (IDs::clip) || static_cast<int> (other.getProperty (IDs::clipId, -1)) == ignoreClipId)
             continue;
 
-        if (clip::overlaps (startBar, lengthBars,
-                            static_cast<int> (other.getProperty (IDs::startBar, 0)),
-                            static_cast<int> (other.getProperty (IDs::lengthBars, 0))))
+        if (clip::overlapsSteps (startStep, lengthSteps, clipStartStep (other), clipLengthSteps (other)))
             return false;
     }
 
@@ -641,7 +710,15 @@ bool ProjectState::canPlaceClip (int trackId, int startBar, int lengthBars, int 
 
 int ProjectState::addClip (int trackId, int startBar, int lengthBars)
 {
-    if (! canPlaceClip (trackId, startBar, lengthBars))
+    if (! clip::isValidRange (startBar, lengthBars))
+        return -1;
+
+    return addClipAtStep (trackId, startBar * kStepsPerBar, lengthBars * kStepsPerBar);
+}
+
+int ProjectState::addClipAtStep (int trackId, int startStep, int lengthSteps)
+{
+    if (! canPlaceClipAtStep (trackId, startStep, lengthSteps))
         return -1;
 
     auto trackNode = findTrackNode (trackId);
@@ -656,8 +733,7 @@ int ProjectState::addClip (int trackId, int startBar, int lengthBars)
 
     juce::ValueTree node (IDs::clip);
     node.setProperty (IDs::clipId, id, nullptr);
-    node.setProperty (IDs::startBar, startBar, nullptr);
-    node.setProperty (IDs::lengthBars, lengthBars, nullptr);
+    setClipStepRange (node, startStep, lengthSteps, nullptr);
     if (isVoice)
         node.setProperty (IDs::takeId, linkedTakeId, nullptr);
 
@@ -697,13 +773,12 @@ bool ProjectState::setClipRange (int trackId, int clipId, int startBar, int leng
         if (! canPlaceClip (trackId, startBar, lengthBars, clipId))
             return false;
 
-        if (static_cast<int> (node.getProperty (IDs::startBar, -1)) == startBar
-            && static_cast<int> (node.getProperty (IDs::lengthBars, -1)) == lengthBars)
+        if (clipStartStep (node) == startBar * kStepsPerBar
+            && clipLengthSteps (node) == lengthBars * kStepsPerBar)
             return true;   // nada a fazer (não suja o projeto nem o histórico)
 
         undoManager.beginNewTransaction();
-        node.setProperty (IDs::startBar, startBar, &undoManager);
-        node.setProperty (IDs::lengthBars, lengthBars, &undoManager);
+        setClipStepRange (node, startBar * kStepsPerBar, lengthBars * kStepsPerBar, &undoManager);
         return true;
     }
 
@@ -725,6 +800,9 @@ bool ProjectState::evaluateTrim (int trackId, int clipId, int newStartBar, int& 
 
         const int start = static_cast<int> (node.getProperty (IDs::startBar, 0));
         const int end = start + static_cast<int> (node.getProperty (IDs::lengthBars, 0));
+        if (clipStartStep (node) != start * kStepsPerBar
+            || clipLengthSteps (node) != (end - start) * kStepsPerBar)
+            return false;
         if (newStartBar == start || newStartBar < 0 || newStartBar > end - kMinClipBars)
             return false;
         if (! canPlaceClip (trackId, newStartBar, end - newStartBar, clipId))
@@ -775,8 +853,7 @@ bool ProjectState::trimClipStart (int trackId, int clipId, int newStartBar)
 
         const int end = static_cast<int> (node.getProperty (IDs::startBar, 0)) + static_cast<int> (node.getProperty (IDs::lengthBars, 0));
         undoManager.beginNewTransaction();
-        node.setProperty (IDs::startBar, newStartBar, &undoManager);
-        node.setProperty (IDs::lengthBars, end - newStartBar, &undoManager);
+        setClipStepRange (node, newStartBar * kStepsPerBar, (end - newStartBar) * kStepsPerBar, &undoManager);
         if (isAudio)
         {
             if (newOffset > 0)
@@ -804,6 +881,9 @@ int ProjectState::splitClip (int trackId, int clipId, int atBar)
 
         const int start = static_cast<int> (node.getProperty (IDs::startBar, 0));
         const int end = start + static_cast<int> (node.getProperty (IDs::lengthBars, 0));
+        if (clipStartStep (node) != start * kStepsPerBar
+            || clipLengthSteps (node) != (end - start) * kStepsPerBar)
+            return -1;
         if (atBar <= start || atBar >= end)
             return -1;
 
@@ -812,8 +892,7 @@ int ProjectState::splitClip (int trackId, int clipId, int atBar)
 
         juce::ValueTree second (IDs::clip);
         second.setProperty (IDs::clipId, newId, nullptr);
-        second.setProperty (IDs::startBar, atBar, nullptr);
-        second.setProperty (IDs::lengthBars, end - atBar, nullptr);
+        setClipStepRange (second, atBar * kStepsPerBar, (end - atBar) * kStepsPerBar, nullptr);
         if (isAudio)
         {
             second.setProperty (IDs::takeId, node.getProperty (IDs::takeId), nullptr);
@@ -825,7 +904,7 @@ int ProjectState::splitClip (int trackId, int clipId, int atBar)
         }
 
         undoManager.beginNewTransaction();
-        node.setProperty (IDs::lengthBars, atBar - start, &undoManager);
+        setClipStepRange (node, start * kStepsPerBar, (atBar - start) * kStepsPerBar, &undoManager);
         trackNode.appendChild (second, &undoManager);
         return newId;
     }
@@ -875,15 +954,21 @@ std::vector<ClipData> ProjectState::getClips (int trackId) const
     {
         const auto node = trackNode.getChild (c);
         if (node.hasType (IDs::clip))
+        {
+            const int startStep = clipStartStep (node);
+            const int lengthSteps = clipLengthSteps (node);
+            const int startBar = startStep / kStepsPerBar;
+            const int endBar = (startStep + lengthSteps + kStepsPerBar - 1) / kStepsPerBar;
             result.push_back ({ static_cast<int> (node.getProperty (IDs::clipId, -1)),
-                                static_cast<int> (node.getProperty (IDs::startBar, 0)),
-                                static_cast<int> (node.getProperty (IDs::lengthBars, 0)),
+                                startBar, endBar - startBar,
                                 static_cast<int> (node.getProperty (IDs::takeId, -1)),
-                                static_cast<int> (node.getProperty (IDs::clipOffsetMs, 0)) });
+                                static_cast<int> (node.getProperty (IDs::clipOffsetMs, 0)),
+                                startStep, lengthSteps });
+        }
     }
 
     std::sort (result.begin(), result.end(),
-               [] (const ClipData& a, const ClipData& b) { return a.startBar < b.startBar; });
+               [] (const ClipData& a, const ClipData& b) { return a.startStep < b.startStep; });
     return result;
 }
 
@@ -1386,13 +1471,30 @@ void ProjectState::setHarmonyChord (int slot, const std::array<int, 3>& midiNote
 
 void ProjectState::addAudioClip (const AudioClipModel& clip)
 {
-    if (clip.filePath.isEmpty() || clip.durationSeconds <= 0.0)
+    if (clip.filePath.isEmpty() || ! take::isValidDuration (clip.durationSeconds))
+        return;
+
+    const int startPosition = clip.startPosition >= 0
+                                  ? clip.startPosition
+                                  : juce::jmax (0, clip.startBar) * kStepsPerBar;
+    const int durationSteps = clip.duration > 0
+                                  ? clip.duration
+                                  : juce::jmax (1, static_cast<int> (std::ceil (clip.durationSeconds
+                                                                                 * getBpm() / 15.0)));
+    const int sourceDurationMs = static_cast<int> (std::ceil (clip.durationSeconds * 1000.0));
+    const int trimStart = juce::jlimit (0, sourceDurationMs, clip.trimStartOffset);
+    const int trimEnd = juce::jlimit (0, sourceDurationMs, clip.trimEndOffset);
+    if (trimStart + trimEnd >= sourceDurationMs)
         return;
 
     juce::ValueTree clipTree (IDs::audioClip);
     clipTree.setProperty (IDs::filePath, clip.filePath, &undoManager);
-    clipTree.setProperty (IDs::startBar, juce::jmax (0, clip.startBar), &undoManager);
+    clipTree.setProperty (IDs::startBar, startPosition / kStepsPerBar, &undoManager);
+    clipTree.setProperty (IDs::startPosition, startPosition, &undoManager);
+    clipTree.setProperty (IDs::duration, durationSteps, &undoManager);
     clipTree.setProperty (IDs::durationSeconds, juce::jmax (0.0, clip.durationSeconds), &undoManager);
+    clipTree.setProperty (IDs::trimStartOffset, trimStart, &undoManager);
+    clipTree.setProperty (IDs::trimEndOffset, trimEnd, &undoManager);
     tree.getChildWithName (IDs::voiceTracks).appendChild (clipTree, &undoManager);
 }
 
@@ -1408,9 +1510,18 @@ AudioClipModel ProjectState::getAudioClip (int index) const
         return {};
 
     const auto clip = clips.getChild (index);
+    const auto durationSeconds = static_cast<double> (clip.getProperty (IDs::durationSeconds, 0.0));
+    const int startPosition = static_cast<int> (clip.getProperty (
+        IDs::startPosition, static_cast<int> (clip.getProperty (IDs::startBar, 0)) * kStepsPerBar));
+    const int duration = static_cast<int> (clip.getProperty (
+        IDs::duration, juce::jmax (1, static_cast<int> (std::ceil (durationSeconds * getBpm() / 15.0)))));
     return { clip.getProperty (IDs::filePath, {}).toString(),
-             static_cast<int> (clip.getProperty (IDs::startBar, 0)),
-             static_cast<double> (clip.getProperty (IDs::durationSeconds, 0.0)) };
+             startPosition / kStepsPerBar,
+             durationSeconds,
+             startPosition,
+             duration,
+             static_cast<int> (clip.getProperty (IDs::trimStartOffset, 0)),
+             static_cast<int> (clip.getProperty (IDs::trimEndOffset, 0)) };
 }
 
 juce::String ProjectState::getHarmonyNotes (int slot) const

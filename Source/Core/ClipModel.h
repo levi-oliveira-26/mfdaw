@@ -5,12 +5,14 @@ namespace mf
 // ---------------------------------------------------------------------------
 // Clipes da Playlist (Vertical Slice 02) — vocabulário puro, sem JUCE.
 //
-// Um clipe ocupa um intervalo de compassos INTEIROS [startBar, startBar+lengthBars)
-// dentro de UMA faixa. Clipes da mesma faixa nunca se sobrepõem.
+// As posições dos clipes da Playlist usam passos de 1/16 de compasso.
+// O acesso legado em compassos inteiros continua disponível para as superfícies atuais.
 // ---------------------------------------------------------------------------
 
 /** Tamanho da Playlist no Slice 02: 16 compassos (a lane é ajustada à largura, sem rolagem horizontal). */
 inline constexpr int kPlaylistBars   = 16;
+inline constexpr int kStepsPerBar    = 16;
+inline constexpr int kPlaylistSteps  = kPlaylistBars * kStepsPerBar;
 inline constexpr int kMinClipBars    = 1;
 inline constexpr int kDefaultClipBars = 2;
 
@@ -22,19 +24,34 @@ struct ClipData
     int lengthBars { 0 };
     int takeId { -1 }; // vínculo opcional a um TAKE, usado somente por faixas de Voz e Amostra
     int offsetMs { 0 }; // onde o clipe começa DENTRO do áudio (trim esquerdo / divisão); só clipes com takeId
+    int startStep { -1 }; // posição em passos de 1/16 de compasso
+    int lengthSteps { 0 }; // duração em passos de 1/16 de compasso
 
     [[nodiscard]] constexpr bool isValid() const noexcept { return id > 0; }
     [[nodiscard]] constexpr int  endBar() const noexcept  { return startBar + lengthBars; }
+    [[nodiscard]] constexpr int  endStep() const noexcept { return startStep + lengthSteps; }
 };
 
 namespace clip
 {
 [[nodiscard]] constexpr bool isValidRange (int startBar, int lengthBars) noexcept
 {
-    return startBar >= 0 && lengthBars >= kMinClipBars && startBar + lengthBars <= kPlaylistBars;
+    return startBar >= 0 && startBar < kPlaylistBars
+           && lengthBars >= kMinClipBars && lengthBars <= kPlaylistBars - startBar;
+}
+
+[[nodiscard]] constexpr bool isValidStepRange (int startStep, int lengthSteps) noexcept
+{
+    return startStep >= 0 && startStep < kPlaylistSteps
+           && lengthSteps >= 1 && lengthSteps <= kPlaylistSteps - startStep;
 }
 
 [[nodiscard]] constexpr bool overlaps (int startA, int lengthA, int startB, int lengthB) noexcept
+{
+    return startA < startB + lengthB && startB < startA + lengthA;
+}
+
+[[nodiscard]] constexpr bool overlapsSteps (int startA, int lengthA, int startB, int lengthB) noexcept
 {
     return startA < startB + lengthB && startB < startA + lengthA;
 }

@@ -15,8 +15,6 @@ namespace mf
 // necessariamente no início de um compasso.
 // ---------------------------------------------------------------------------
 inline constexpr int kMaxTakesPerTrack  = 32;
-inline constexpr int kStepsPerBar       = 16;
-inline constexpr int kPlaylistSteps     = kPlaylistBars * kStepsPerBar;
 inline constexpr double kMaxTakeSeconds = 3600.0;
 
 namespace take
