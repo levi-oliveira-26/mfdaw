@@ -96,6 +96,7 @@ add_executable(MFDawTests
     Source/Tests/TakePlayerTests.cpp
     Source/Tests/SampleTrackTests.cpp
     Source/Tests/ClipTrimSplitTests.cpp
+    Source/Tests/ClipStepTrimTests.cpp
     Source/Core/ChordGenerator.cpp
     Source/Core/ScaleLock.cpp
     Source/Core/ProjectState.cpp

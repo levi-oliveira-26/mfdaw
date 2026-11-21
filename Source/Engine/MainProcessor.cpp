@@ -364,8 +364,8 @@ void MainProcessor::pushClipRegions()
                         break;
                     }
 
-                const int startStep = clip.startBar * kStepsPerBar;
-                const int endStep = (clip.startBar + clip.lengthBars) * kStepsPerBar;
+                const int startStep = clip.startStep();   // trim fino: começa/termina em qualquer passo
+                const int endStep = clip.endStep();
                 post (EngineEvent::setClipRegion (slot, regionIndex, startStep, endStep, takeIndex, clip.offsetMs));
                 ++regionIndex;
                 if (regionIndex >= TakePlayer::kMaxRegionsPerSlot)

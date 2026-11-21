@@ -299,9 +299,10 @@ void TrackRowComponent::resized()
 // ---------------------------------------------------------------------------
 juce::Rectangle<float> TrackRowComponent::clipBounds (const ClipData& c) const noexcept
 {
-    const float bw = barWidth();
-    return { static_cast<float> (kHeaderWidth) + static_cast<float> (c.startBar) * bw + 1.0f, 8.0f,
-             static_cast<float> (c.lengthBars) * bw - 2.0f, static_cast<float> (getHeight()) - 17.0f };
+    // Posição em passos: clipes de áudio com trim fino começam/terminam no meio de um compasso.
+    const float stepW = barWidth() / static_cast<float> (kStepsPerBar);
+    return { static_cast<float> (kHeaderWidth) + static_cast<float> (c.startStep()) * stepW + 1.0f, 8.0f,
+             static_cast<float> (c.endStep() - c.startStep()) * stepW - 2.0f, static_cast<float> (getHeight()) - 17.0f };
 }
 
 int TrackRowComponent::clipIndexAtX (int x) const noexcept
@@ -345,8 +346,9 @@ void TrackRowComponent::mouseDown (const juce::MouseEvent& event)
 
     if (event.mods.isPopupMenu())
     {
-        showClipMenu (hit.id, juce::jlimit (0, kPlaylistBars - 1,
-                                            static_cast<int> (static_cast<float> (event.x - kHeaderWidth) / barWidth())));
+        showClipMenu (hit.id, juce::jlimit (0, kPlaylistSteps - 1,
+                                            static_cast<int> (static_cast<float> (event.x - kHeaderWidth)
+                                                              / (barWidth() / static_cast<float> (kStepsPerBar)))));
         return;
     }
 
@@ -369,32 +371,51 @@ void TrackRowComponent::mouseDrag (const juce::MouseEvent& event)
         return;
 
     const int deltaBars = juce::roundToInt (static_cast<float> (event.getDistanceFromDragStartX()) / barWidth());
+    const int deltaSteps = juce::roundToInt (static_cast<float> (event.getDistanceFromDragStartX())
+                                             / (barWidth() / static_cast<float> (kStepsPerBar)));
+    const bool fine = dragOriginal.takeId >= 0;   // áudio: trim em passos (1/16 de compasso)
     ClipData candidate = dragOriginal;
+    bool valid = false;
 
     if (dragMode == DragMode::Move)
     {
         candidate.startBar = clip::clampStart (dragOriginal.startBar + deltaBars, dragOriginal.lengthBars);
+        valid = state.canPlaceClip (trackId, candidate.startBar, candidate.lengthBars, dragOriginal.id);
     }
     else if (dragMode == DragMode::ResizeLeft)
     {
         // Trim esquerdo: o fim fica fixo; o início anda (o áudio cortado continua no arquivo).
-        const int end = dragOriginal.startBar + dragOriginal.lengthBars;
-        candidate.startBar = juce::jlimit (0, end - kMinClipBars, dragOriginal.startBar + deltaBars);
-        candidate.lengthBars = end - candidate.startBar;
+        const int endStep = dragOriginal.endStep();
+        const int step = fine ? juce::jlimit (0, endStep - 1, dragOriginal.startStep() + deltaSteps)
+                              : juce::jlimit (0, endStep - kStepsPerBar, dragOriginal.startStep() + deltaBars * kStepsPerBar);
+        const auto layout = clip::layoutFromSteps (step, endStep);
+        candidate.startBar = layout.startBar;
+        candidate.lengthBars = layout.lengthBars;
+        candidate.leadSteps = fine ? layout.leadSteps : 0;
+        candidate.tailSteps = fine ? layout.tailSteps : 0;
+        valid = step == dragOriginal.startStep()
+             || (fine ? state.canTrimClipStartStep (trackId, dragOriginal.id, step)
+                       : state.canTrimClipStart (trackId, dragOriginal.id, step / kStepsPerBar));
+    }
+    else if (fine)
+    {
+        const int startStep = dragOriginal.startStep();
+        const int endStep = juce::jlimit (startStep + 1, kPlaylistSteps, dragOriginal.endStep() + deltaSteps);
+        const auto layout = clip::layoutFromSteps (startStep, endStep);
+        candidate.lengthBars = layout.lengthBars;
+        candidate.tailSteps = layout.tailSteps;
+        valid = endStep == dragOriginal.endStep() || state.canTrimClipEndStep (trackId, dragOriginal.id, endStep);
     }
     else
     {
         candidate.lengthBars = juce::jlimit (kMinClipBars, kPlaylistBars - dragOriginal.startBar,
                                              dragOriginal.lengthBars + deltaBars);
+        valid = state.canPlaceClip (trackId, candidate.startBar, candidate.lengthBars, dragOriginal.id);
     }
 
     // O domínio decide se a posição é válida; se não for, a pré-visualização fica onde estava.
-    const bool valid = dragMode == DragMode::ResizeLeft
-                           ? (candidate.startBar == dragOriginal.startBar
-                              || state.canTrimClipStart (trackId, dragOriginal.id, candidate.startBar))
-                           : state.canPlaceClip (trackId, candidate.startBar, candidate.lengthBars, dragOriginal.id);
-
-    if (valid && (candidate.startBar != dragPreview.startBar || candidate.lengthBars != dragPreview.lengthBars))
+    if (valid && (candidate.startStep() != dragPreview.startStep() || candidate.endStep() != dragPreview.endStep()
+                  || candidate.startBar != dragPreview.startBar))
     {
         dragPreview = candidate;
         repaint();
@@ -406,13 +427,24 @@ void TrackRowComponent::mouseUp (const juce::MouseEvent&)
     if (dragMode == DragMode::None)
         return;
 
-    const bool wasResizingLeft = dragMode == DragMode::ResizeLeft;
+    const auto mode = dragMode;
     dragMode = DragMode::None;   // antes de gravar: o refresh disparado pela árvore já recarrega os clipes
+    const bool fine = dragOriginal.takeId >= 0;
 
-    if (wasResizingLeft)
+    if (mode == DragMode::ResizeLeft)
     {
-        if (dragPreview.startBar != dragOriginal.startBar)
-            state.trimClipStart (trackId, dragOriginal.id, dragPreview.startBar);
+        if (dragPreview.startStep() != dragOriginal.startStep())
+        {
+            if (fine)
+                state.trimClipStartStep (trackId, dragOriginal.id, dragPreview.startStep());
+            else
+                state.trimClipStart (trackId, dragOriginal.id, dragPreview.startBar);
+        }
+    }
+    else if (mode == DragMode::ResizeRight && fine)
+    {
+        if (dragPreview.endStep() != dragOriginal.endStep())
+            state.trimClipEndStep (trackId, dragOriginal.id, dragPreview.endStep());
     }
     else if (dragPreview.startBar != dragOriginal.startBar || dragPreview.lengthBars != dragOriginal.lengthBars)
         state.setClipRange (trackId, dragOriginal.id, dragPreview.startBar, dragPreview.lengthBars);
@@ -434,19 +466,29 @@ void TrackRowComponent::mouseDoubleClick (const juce::MouseEvent& event)
         state.addClip (trackId, bar, juce::jmin (kDefaultClipBars, room));
 }
 
-void TrackRowComponent::showClipMenu (int clipId, int clickedBar)
+void TrackRowComponent::showClipMenu (int clipId, int clickedStep)
 {
+    // Áudio divide em qualquer passo; padrões (bateria/acordes/melodia) só na linha de um compasso.
     bool canSplit = false;
+    int splitStep = clickedStep;
     for (const auto& c : clips)
         if (c.id == clipId)
-            canSplit = clickedBar > c.startBar && clickedBar < c.endBar();
+        {
+            if (c.takeId < 0)
+                splitStep = ((clickedStep + kStepsPerBar / 2) / kStepsPerBar) * kStepsPerBar;   // linha de compasso mais próxima
+
+            canSplit = splitStep > c.startStep() && splitStep < c.endStep();
+        }
 
     juce::PopupMenu menu;
-    menu.addItem (2, theme::txt ("Dividir no compasso ") + juce::String (clickedBar + 1), canSplit);
+    menu.addItem (2, splitStep % kStepsPerBar == 0
+                         ? theme::txt ("Dividir no compasso ") + juce::String (splitStep / kStepsPerBar + 1)
+                         : theme::txt ("Dividir aqui"),
+                  canSplit);
     menu.addItem (1, theme::txt ("Remover clipe"));
 
     juce::Component::SafePointer<TrackRowComponent> safeThis (this);
-    menu.showMenuAsync (juce::PopupMenu::Options(), [safeThis, clipId, clickedBar] (int result)
+    menu.showMenuAsync (juce::PopupMenu::Options(), [safeThis, clipId, splitStep] (int result)
     {
         if (safeThis == nullptr)
             return;
@@ -454,7 +496,7 @@ void TrackRowComponent::showClipMenu (int clipId, int clickedBar)
         if (result == 1)
             safeThis->state.removeClip (safeThis->trackId, clipId);
         else if (result == 2)
-            safeThis->state.splitClip (safeThis->trackId, clipId, clickedBar);
+            safeThis->state.splitClipAtStep (safeThis->trackId, clipId, splitStep);
     });
 }
 

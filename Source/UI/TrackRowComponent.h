@@ -83,7 +83,7 @@ private:
     [[nodiscard]] float barWidth() const noexcept { return barWidthFor (getWidth()); }
     [[nodiscard]] int clipIndexAtX (int x) const noexcept;               // -1 se vazio / fora da lane
     [[nodiscard]] juce::Rectangle<float> clipBounds (const ClipData& c) const noexcept;
-    void showClipMenu (int clipId, int clickedBar);
+    void showClipMenu (int clipId, int clickedStep);
     void refreshTakeVisuals();
     [[nodiscard]] const TakeVisual* findTakeVisual (int takeId) const noexcept;
 

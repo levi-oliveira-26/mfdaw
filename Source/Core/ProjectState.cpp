@@ -4,8 +4,33 @@
 
 #include "Core/FaderScale.h"
 
+
+
 namespace mf
 {
+namespace
+{
+ClipData readClipNode (const juce::ValueTree& node)
+{
+    return { static_cast<int> (node.getProperty (IDs::clipId, -1)),
+             static_cast<int> (node.getProperty (IDs::startBar, 0)),
+             static_cast<int> (node.getProperty (IDs::lengthBars, 0)),
+             static_cast<int> (node.getProperty (IDs::takeId, -1)),
+             static_cast<int> (node.getProperty (IDs::clipOffsetMs, 0)),
+             static_cast<int> (node.getProperty (IDs::clipLeadSteps, 0)),
+             static_cast<int> (node.getProperty (IDs::clipTailSteps, 0)) };
+}
+
+/** Grava (ou remove, se zero) uma propriedade inteira opcional. */
+void setOptionalInt (juce::ValueTree& node, const juce::Identifier& key, int value, juce::UndoManager* um)
+{
+    if (value > 0)
+        node.setProperty (key, value, um);
+    else
+        node.removeProperty (key, um);
+}
+} // namespace
+
 namespace
 {
 constexpr const char* kDefaultTrackNames[kNumTracks] = {
@@ -259,6 +284,7 @@ void ProjectState::sanitizePlaylist()
     for (int t = 0; t < playlist.getNumChildren(); ++t)
     {
         auto trackNode = playlist.getChild (t);
+        const bool isAudioTrack = isAudioSourceTrackNode (trackNode);
         std::vector<ClipData> kept;
 
         for (int c = 0; c < trackNode.getNumChildren();)
@@ -275,8 +301,27 @@ void ProjectState::sanitizePlaylist()
             const int length = static_cast<int> (node.getProperty (IDs::lengthBars, 0));
 
             bool valid = node.hasType (IDs::clip) && clip::isValidRange (start, length);
+            int lead = 0, tail = 0;
+
+            if (valid)   // trim fino: só clipes de áudio, 0..15 passos, sobrando ao menos 1 passo audível
+            {
+                if (isAudioTrack)
+                {
+                    lead = juce::jlimit (0, kStepsPerBar - 1, static_cast<int> (node.getProperty (IDs::clipLeadSteps, 0)));
+                    tail = juce::jlimit (0, kStepsPerBar - 1, static_cast<int> (node.getProperty (IDs::clipTailSteps, 0)));
+                    if (length * kStepsPerBar - lead - tail < 1)
+                        lead = tail = 0;
+                }
+
+                if (static_cast<int> (node.getProperty (IDs::clipLeadSteps, 0)) != lead)
+                    setOptionalInt (node, IDs::clipLeadSteps, lead, nullptr);
+                if (static_cast<int> (node.getProperty (IDs::clipTailSteps, 0)) != tail)
+                    setOptionalInt (node, IDs::clipTailSteps, tail, nullptr);
+            }
+
             for (const auto& other : kept)
-                if (valid && clip::overlaps (start, length, other.startBar, other.lengthBars))
+                if (valid && clip::overlapsSteps (start * kStepsPerBar + lead, (start + length) * kStepsPerBar - tail,
+                                                  other.startStep(), other.endStep()))
                     valid = false;
 
             if (! valid)
@@ -293,7 +338,7 @@ void ProjectState::sanitizePlaylist()
             }
 
             usedClipIds.add (id);
-            kept.push_back ({ id, start, length, static_cast<int> (node.getProperty (IDs::takeId, -1)) });
+            kept.push_back ({ id, start, length, static_cast<int> (node.getProperty (IDs::takeId, -1)), 0, lead, tail });
             ++c;
         }
     }
@@ -618,10 +663,11 @@ std::unique_ptr<TrackModel> ProjectState::getTrackById (int trackId)
 // ---------------------------------------------------------------------------
 // Clipes (Vertical Slice 02)
 // ---------------------------------------------------------------------------
-bool ProjectState::canPlaceClip (int trackId, int startBar, int lengthBars, int ignoreClipId) const
+
+bool ProjectState::canPlaceSteps (int trackId, int startStep, int endStep, int ignoreClipId) const
 {
     const auto trackNode = findTrackNode (trackId);
-    if (! trackNode.isValid() || ! clip::isValidRange (startBar, lengthBars))
+    if (! trackNode.isValid() || startStep < 0 || endStep > kPlaylistSteps || startStep >= endStep)
         return false;
 
     for (int c = 0; c < trackNode.getNumChildren(); ++c)
@@ -630,13 +676,32 @@ bool ProjectState::canPlaceClip (int trackId, int startBar, int lengthBars, int 
         if (! other.hasType (IDs::clip) || static_cast<int> (other.getProperty (IDs::clipId, -1)) == ignoreClipId)
             continue;
 
-        if (clip::overlaps (startBar, lengthBars,
-                            static_cast<int> (other.getProperty (IDs::startBar, 0)),
-                            static_cast<int> (other.getProperty (IDs::lengthBars, 0))))
+        const auto data = readClipNode (other);
+        if (clip::overlapsSteps (startStep, endStep, data.startStep(), data.endStep()))
             return false;
     }
 
     return true;
+}
+
+bool ProjectState::canPlaceClip (int trackId, int startBar, int lengthBars, int ignoreClipId) const
+{
+    if (! findTrackNode (trackId).isValid() || ! clip::isValidRange (startBar, lengthBars))
+        return false;
+
+    int startStep = startBar * kStepsPerBar;
+    int endStep = (startBar + lengthBars) * kStepsPerBar;
+
+    // Mover um clipe de áudio com trim fino leva as folgas junto (só ocupa o que soa).
+    if (ignoreClipId >= 0)
+        for (const auto& existing : getClips (trackId))
+            if (existing.id == ignoreClipId && existing.takeId >= 0 && existing.lengthBars == lengthBars)
+            {
+                startStep += existing.leadSteps;
+                endStep -= existing.tailSteps;
+            }
+
+    return canPlaceSteps (trackId, startStep, endStep, ignoreClipId);
 }
 
 int ProjectState::addClip (int trackId, int startBar, int lengthBars)
@@ -701,9 +766,12 @@ bool ProjectState::setClipRange (int trackId, int clipId, int startBar, int leng
             && static_cast<int> (node.getProperty (IDs::lengthBars, -1)) == lengthBars)
             return true;   // nada a fazer (não suja o projeto nem o histórico)
 
+        const auto before = readClipNode (node);
         undoManager.beginNewTransaction();
         node.setProperty (IDs::startBar, startBar, &undoManager);
         node.setProperty (IDs::lengthBars, lengthBars, &undoManager);
+        if (before.lengthBars != lengthBars && before.tailSteps > 0)
+            node.removeProperty (IDs::clipTailSteps, &undoManager);   // mudou o tamanho em compassos: a folga final some
         return true;
     }
 
@@ -711,41 +779,75 @@ bool ProjectState::setClipRange (int trackId, int clipId, int startBar, int leng
 }
 
 
-bool ProjectState::evaluateTrim (int trackId, int clipId, int newStartBar, int& newOffsetMs, bool& isAudio) const
+ClipData ProjectState::findClip (int trackId, int clipId) const
 {
-    const auto trackNode = findTrackNode (trackId);
-    if (! trackNode.isValid())
+    for (const auto& c : getClips (trackId))
+        if (c.id == clipId)
+            return c;
+
+    return {};
+}
+
+bool ProjectState::evaluateClipSteps (int trackId, int clipId, int newStartStep, int newEndStep, ClipData& out) const
+{
+    const ClipData old = findClip (trackId, clipId);
+    if (! old.isValid())
         return false;
 
+    const bool isAudio = old.takeId >= 0;
+    if (newStartStep < 0 || newEndStep > kPlaylistSteps || newStartStep >= newEndStep)
+        return false;
+    if (! isAudio && (newStartStep % kStepsPerBar != 0 || newEndStep % kStepsPerBar != 0))
+        return false;   // clipes de padrão só andam de compasso em compasso
+    if (newStartStep == old.startStep() && newEndStep == old.endStep())
+        return false;
+    if (! canPlaceSteps (trackId, newStartStep, newEndStep, clipId))
+        return false;   // não invade o clipe vizinho
+
+    out = old;
+    const auto layout = clip::layoutFromSteps (newStartStep, newEndStep);
+    out.startBar = layout.startBar;
+    out.lengthBars = layout.lengthBars;
+    out.leadSteps = isAudio ? layout.leadSteps : 0;
+    out.tailSteps = isAudio ? layout.tailSteps : 0;
+    out.offsetMs = 0;
+
+    if (isAudio)
+    {
+        out.offsetMs = old.offsetMs + clip::stepsToMs (newStartStep - old.startStep(), getBpm());
+        if (out.offsetMs < 0)
+            return false;   // não dá para abrir antes do começo do áudio
+
+        for (const auto& t : getTakes (trackId))
+            if (t.id == old.takeId && out.offsetMs >= static_cast<int> (t.durationSeconds * 1000.0))
+                return false;   // cortaria tudo: o clipe ficaria sem som
+    }
+
+    return true;
+}
+
+bool ProjectState::applyClipSteps (int trackId, int clipId, int newStartStep, int newEndStep)
+{
+    ClipData result;
+    if (! evaluateClipSteps (trackId, clipId, newStartStep, newEndStep, result))
+        return false;
+
+    auto trackNode = findTrackNode (trackId);
     for (int c = 0; c < trackNode.getNumChildren(); ++c)
     {
-        const auto node = trackNode.getChild (c);
+        auto node = trackNode.getChild (c);
         if (! node.hasType (IDs::clip) || static_cast<int> (node.getProperty (IDs::clipId, -1)) != clipId)
             continue;
 
-        const int start = static_cast<int> (node.getProperty (IDs::startBar, 0));
-        const int end = start + static_cast<int> (node.getProperty (IDs::lengthBars, 0));
-        if (newStartBar == start || newStartBar < 0 || newStartBar > end - kMinClipBars)
-            return false;
-        if (! canPlaceClip (trackId, newStartBar, end - newStartBar, clipId))
-            return false;   // abrir para a esquerda não invade o clipe vizinho
-
-        const int takeId = static_cast<int> (node.getProperty (IDs::takeId, -1));
-        isAudio = takeId >= 0;
-        newOffsetMs = 0;
-
-        if (isAudio)
+        undoManager.beginNewTransaction();
+        node.setProperty (IDs::startBar, result.startBar, &undoManager);
+        node.setProperty (IDs::lengthBars, result.lengthBars, &undoManager);
+        if (result.takeId >= 0)
         {
-            newOffsetMs = static_cast<int> (node.getProperty (IDs::clipOffsetMs, 0))
-                          + (newStartBar - start) * clip::barDurationMs (getBpm());
-            if (newOffsetMs < 0)
-                return false;   // não dá para abrir antes do começo do áudio
-
-            for (const auto& t : getTakes (trackId))
-                if (t.id == takeId && newOffsetMs >= static_cast<int> (t.durationSeconds * 1000.0))
-                    return false;   // cortaria tudo: o clipe ficaria sem som
+            setOptionalInt (node, IDs::clipLeadSteps, result.leadSteps, &undoManager);
+            setOptionalInt (node, IDs::clipTailSteps, result.tailSteps, &undoManager);
+            setOptionalInt (node, IDs::clipOffsetMs, result.offsetMs, &undoManager);
         }
-
         return true;
     }
 
@@ -754,79 +856,88 @@ bool ProjectState::evaluateTrim (int trackId, int clipId, int newStartBar, int& 
 
 bool ProjectState::canTrimClipStart (int trackId, int clipId, int newStartBar) const
 {
-    int offset = 0;
-    bool audio = false;
-    return evaluateTrim (trackId, clipId, newStartBar, offset, audio);
+    const auto old = findClip (trackId, clipId);
+    ClipData unused;
+    return old.isValid() && evaluateClipSteps (trackId, clipId, newStartBar * kStepsPerBar, old.endStep(), unused);
 }
 
 bool ProjectState::trimClipStart (int trackId, int clipId, int newStartBar)
 {
-    int newOffset = 0;
-    bool isAudio = false;
-    if (! evaluateTrim (trackId, clipId, newStartBar, newOffset, isAudio))
-        return false;
+    const auto old = findClip (trackId, clipId);
+    return old.isValid() && applyClipSteps (trackId, clipId, newStartBar * kStepsPerBar, old.endStep());
+}
 
-    auto trackNode = findTrackNode (trackId);
-    for (int c = 0; c < trackNode.getNumChildren(); ++c)
-    {
-        auto node = trackNode.getChild (c);
-        if (! node.hasType (IDs::clip) || static_cast<int> (node.getProperty (IDs::clipId, -1)) != clipId)
-            continue;
+bool ProjectState::canTrimClipStartStep (int trackId, int clipId, int newStartStep) const
+{
+    const auto old = findClip (trackId, clipId);
+    ClipData unused;
+    return old.isValid() && old.takeId >= 0 && evaluateClipSteps (trackId, clipId, newStartStep, old.endStep(), unused);
+}
 
-        const int end = static_cast<int> (node.getProperty (IDs::startBar, 0)) + static_cast<int> (node.getProperty (IDs::lengthBars, 0));
-        undoManager.beginNewTransaction();
-        node.setProperty (IDs::startBar, newStartBar, &undoManager);
-        node.setProperty (IDs::lengthBars, end - newStartBar, &undoManager);
-        if (isAudio)
-        {
-            if (newOffset > 0)
-                node.setProperty (IDs::clipOffsetMs, newOffset, &undoManager);
-            else
-                node.removeProperty (IDs::clipOffsetMs, &undoManager);
-        }
-        return true;
-    }
+bool ProjectState::trimClipStartStep (int trackId, int clipId, int newStartStep)
+{
+    const auto old = findClip (trackId, clipId);
+    return old.isValid() && old.takeId >= 0 && applyClipSteps (trackId, clipId, newStartStep, old.endStep());
+}
 
-    return false;
+bool ProjectState::canTrimClipEndStep (int trackId, int clipId, int newEndStep) const
+{
+    const auto old = findClip (trackId, clipId);
+    ClipData unused;
+    return old.isValid() && old.takeId >= 0 && evaluateClipSteps (trackId, clipId, old.startStep(), newEndStep, unused);
+}
+
+bool ProjectState::trimClipEndStep (int trackId, int clipId, int newEndStep)
+{
+    const auto old = findClip (trackId, clipId);
+    return old.isValid() && old.takeId >= 0 && applyClipSteps (trackId, clipId, old.startStep(), newEndStep);
 }
 
 int ProjectState::splitClip (int trackId, int clipId, int atBar)
 {
-    auto trackNode = findTrackNode (trackId);
-    if (! trackNode.isValid())
+    return splitClipAtStep (trackId, clipId, atBar * kStepsPerBar);
+}
+
+int ProjectState::splitClipAtStep (int trackId, int clipId, int atStep)
+{
+    const ClipData old = findClip (trackId, clipId);
+    if (! old.isValid() || atStep <= old.startStep() || atStep >= old.endStep())
         return -1;
 
+    const bool isAudio = old.takeId >= 0;
+    if (! isAudio && atStep % kStepsPerBar != 0)
+        return -1;   // clipes de padrão só se dividem na linha de um compasso
+
+    auto trackNode = findTrackNode (trackId);
     for (int c = 0; c < trackNode.getNumChildren(); ++c)
     {
         auto node = trackNode.getChild (c);
         if (! node.hasType (IDs::clip) || static_cast<int> (node.getProperty (IDs::clipId, -1)) != clipId)
             continue;
 
-        const int start = static_cast<int> (node.getProperty (IDs::startBar, 0));
-        const int end = start + static_cast<int> (node.getProperty (IDs::lengthBars, 0));
-        if (atBar <= start || atBar >= end)
-            return -1;
-
-        const bool isAudio = node.hasProperty (IDs::takeId) && static_cast<int> (node.getProperty (IDs::takeId, -1)) >= 0;
         const int newId = allocateClipId();
+        const auto first = clip::layoutFromSteps (old.startStep(), atStep);
+        const auto second = clip::layoutFromSteps (atStep, old.endStep());
 
-        juce::ValueTree second (IDs::clip);
-        second.setProperty (IDs::clipId, newId, nullptr);
-        second.setProperty (IDs::startBar, atBar, nullptr);
-        second.setProperty (IDs::lengthBars, end - atBar, nullptr);
+        juce::ValueTree secondNode (IDs::clip);
+        secondNode.setProperty (IDs::clipId, newId, nullptr);
+        secondNode.setProperty (IDs::startBar, second.startBar, nullptr);
+        secondNode.setProperty (IDs::lengthBars, second.lengthBars, nullptr);
         if (isAudio)
         {
-            second.setProperty (IDs::takeId, node.getProperty (IDs::takeId), nullptr);
+            secondNode.setProperty (IDs::takeId, old.takeId, nullptr);
+            setOptionalInt (secondNode, IDs::clipLeadSteps, second.leadSteps, nullptr);
+            setOptionalInt (secondNode, IDs::clipTailSteps, second.tailSteps, nullptr);
             // O 2º clipe continua o áudio exatamente de onde o 1º parou.
-            const int offset = static_cast<int> (node.getProperty (IDs::clipOffsetMs, 0))
-                               + (atBar - start) * clip::barDurationMs (getBpm());
-            if (offset > 0)
-                second.setProperty (IDs::clipOffsetMs, juce::jmin (offset, clip::kMaxClipOffsetMs), nullptr);
+            const int offset = old.offsetMs + clip::stepsToMs (atStep - old.startStep(), getBpm());
+            setOptionalInt (secondNode, IDs::clipOffsetMs, juce::jmin (offset, clip::kMaxClipOffsetMs), nullptr);
         }
 
         undoManager.beginNewTransaction();
-        node.setProperty (IDs::lengthBars, atBar - start, &undoManager);
-        trackNode.appendChild (second, &undoManager);
+        node.setProperty (IDs::lengthBars, first.lengthBars, &undoManager);
+        if (isAudio)
+            setOptionalInt (node, IDs::clipTailSteps, first.tailSteps, &undoManager);
+        trackNode.appendChild (secondNode, &undoManager);
         return newId;
     }
 
@@ -875,15 +986,11 @@ std::vector<ClipData> ProjectState::getClips (int trackId) const
     {
         const auto node = trackNode.getChild (c);
         if (node.hasType (IDs::clip))
-            result.push_back ({ static_cast<int> (node.getProperty (IDs::clipId, -1)),
-                                static_cast<int> (node.getProperty (IDs::startBar, 0)),
-                                static_cast<int> (node.getProperty (IDs::lengthBars, 0)),
-                                static_cast<int> (node.getProperty (IDs::takeId, -1)),
-                                static_cast<int> (node.getProperty (IDs::clipOffsetMs, 0)) });
+            result.push_back (readClipNode (node));
     }
 
     std::sort (result.begin(), result.end(),
-               [] (const ClipData& a, const ClipData& b) { return a.startBar < b.startBar; });
+               [] (const ClipData& a, const ClipData& b) { return a.startStep() < b.startStep(); });
     return result;
 }
 
@@ -1290,17 +1397,17 @@ int ProjectState::getMaxClipLengthAt (int trackId, int startBar, int ignoreClipI
         return 0;
 
     int limit = kPlaylistBars - startBar;
+    const int barStart = startBar * kStepsPerBar;
 
     for (const auto& other : getClips (trackId))
     {
-        if (other.id == ignoreClipId)
+        if (other.id == ignoreClipId || other.endStep() <= barStart)
             continue;
 
-        if (other.startBar <= startBar && startBar < other.endBar())
-            return 0;
+        if (other.startStep() < barStart + kStepsPerBar)
+            return 0;   // o compasso já está (em parte) ocupado
 
-        if (other.startBar > startBar)
-            limit = juce::jmin (limit, other.startBar - startBar);
+        limit = juce::jmin (limit, other.startStep() / kStepsPerBar - startBar);
     }
 
     return limit;

@@ -100,6 +100,8 @@ namespace IDs
     inline const juce::Identifier nextTakeId    { "nextTakeId" };    // contador monotônico (nó PLAYLIST)
     // --- Edições da faixa de Amostra (propriedades do TAKE; Slice 09) ---
     inline const juce::Identifier clipOffsetMs  { "offsetMs" };           // trim esquerdo do clipe (ms dentro do áudio)
+    inline const juce::Identifier clipLeadSteps { "leadSteps" };          // trim fino: passos vazios no começo (0..15)
+    inline const juce::Identifier clipTailSteps { "tailSteps" };          // trim fino: passos vazios no fim (0..15)
     inline const juce::Identifier trimSilence   { "trimSilence" };
     inline const juce::Identifier normalizeAudio { "normalizeAudio" };
     inline const juce::Identifier fadeInMs      { "fadeInMs" };
@@ -232,6 +234,15 @@ public:
     [[nodiscard]] bool canTrimClipStart (int trackId, int clipId, int newStartBar) const;
     /** Divide o clipe em atBar (start < atBar < fim) em dois, ligados ao mesmo áudio. UM passo de undo. Devolve o id do novo clipe ou -1. */
     int splitClip (int trackId, int clipId, int atBar);
+
+    // --- Trim e divisão POR PASSO (Slice 12): só clipes de áudio (Voz/Amostra) ---
+    // Passos absolutos na Playlist (compasso*16+passo). Clipes vizinhos podem dividir um compasso
+    // (a ocupação é medida em passos). Cada operação é UM passo de undo; false/-1 = inválido, nada muda.
+    bool trimClipStartStep (int trackId, int clipId, int newStartStep);
+    bool trimClipEndStep (int trackId, int clipId, int newEndStep);
+    int splitClipAtStep (int trackId, int clipId, int atStep);
+    [[nodiscard]] bool canTrimClipStartStep (int trackId, int clipId, int newStartStep) const;
+    [[nodiscard]] bool canTrimClipEndStep (int trackId, int clipId, int newEndStep) const;
     /** Vincula um clipe de Voz a um take da mesma faixa; -1 remove o vínculo. */
     bool setClipTake (int trackId, int clipId, int takeId);
     /** Clipes da faixa em ordem crescente de início (vazio se a faixa não existe). */
@@ -334,7 +345,11 @@ private:
 
     /** Próximo takeId (monotônico, único em toda a Playlist). */
     int allocateTakeId();
-    bool evaluateTrim (int trackId, int clipId, int newStartBar, int& newOffsetMs, bool& isAudio) const;
+    [[nodiscard]] ClipData findClip (int trackId, int clipId) const;
+    [[nodiscard]] bool canPlaceSteps (int trackId, int startStep, int endStep, int ignoreClipId) const;
+    /** Resultado de levar a parte audível do clipe para [newStartStep,newEndStep); false se inválido. */
+    [[nodiscard]] bool evaluateClipSteps (int trackId, int clipId, int newStartStep, int newEndStep, ClipData& out) const;
+    bool applyClipSteps (int trackId, int clipId, int newStartStep, int newEndStep);
 
     /** Nó PLAYLIST_TRACK do id (inválido se não existir). */
     [[nodiscard]] juce::ValueTree findTrackNode (int trackId) const;
